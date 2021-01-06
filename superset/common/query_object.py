@@ -27,9 +27,16 @@ from pandas import DataFrame
 from superset import app, is_feature_enabled
 from superset.exceptions import QueryObjectValidationError
 from superset.typing import Metric
-from superset.utils import core as utils, pandas_postprocessing
+from superset.utils import pandas_postprocessing
+from superset.utils.core import (
+    DTTM_ALIAS,
+    get_since_until,
+    json_int_dttm_ser,
+    parse_human_timedelta,
+)
 from superset.views.utils import get_time_range_endpoints
 
+config = app.config
 logger = logging.getLogger(__name__)
 
 # TODO: Type Metrics dictionary with TypedDict when it becomes a vanilla python type
@@ -49,6 +56,7 @@ DEPRECATED_EXTRAS_FIELDS = (
     DeprecatedField(old_name="where", new_name="where"),
     DeprecatedField(old_name="having", new_name="having"),
     DeprecatedField(old_name="having_filters", new_name="having_druid"),
+    DeprecatedField(old_name="druid_time_origin", new_name="druid_time_origin"),
 )
 
 
@@ -58,6 +66,8 @@ class QueryObject:
     and druid. The query objects are constructed on the client.
     """
 
+    annotation_layers: List[Dict[str, Any]]
+    applied_time_extras: Dict[str, str]
     granularity: Optional[str]
     from_dttm: Optional[datetime]
     to_dttm: Optional[datetime]
@@ -66,6 +76,7 @@ class QueryObject:
     groupby: List[str]
     metrics: List[Union[Dict[str, Any], str]]
     row_limit: int
+    row_offset: int
     filter: List[Dict[str, Any]]
     timeseries_limit: int
     timeseries_limit_metric: Optional[Metric]
@@ -77,68 +88,90 @@ class QueryObject:
 
     def __init__(
         self,
+        annotation_layers: Optional[List[Dict[str, Any]]] = None,
+        applied_time_extras: Optional[Dict[str, str]] = None,
         granularity: Optional[str] = None,
         metrics: Optional[List[Union[Dict[str, Any], str]]] = None,
         groupby: Optional[List[str]] = None,
         filters: Optional[List[Dict[str, Any]]] = None,
         time_range: Optional[str] = None,
         time_shift: Optional[str] = None,
-        is_timeseries: bool = False,
+        is_timeseries: Optional[bool] = None,
         timeseries_limit: int = 0,
-        row_limit: int = app.config["ROW_LIMIT"],
+        row_limit: Optional[int] = None,
+        row_offset: Optional[int] = None,
         timeseries_limit_metric: Optional[Metric] = None,
         order_desc: bool = True,
         extras: Optional[Dict[str, Any]] = None,
         columns: Optional[List[str]] = None,
         orderby: Optional[List[List[str]]] = None,
-        post_processing: Optional[List[Dict[str, Any]]] = None,
+        post_processing: Optional[List[Optional[Dict[str, Any]]]] = None,
         **kwargs: Any,
     ):
+        annotation_layers = annotation_layers or []
         metrics = metrics or []
         extras = extras or {}
         is_sip_38 = is_feature_enabled("SIP_38_VIZ_REARCHITECTURE")
+        self.annotation_layers = [
+            layer
+            for layer in annotation_layers
+            # formula annotations don't affect the payload, hence can be dropped
+            if layer["annotationType"] != "FORMULA"
+        ]
+        self.applied_time_extras = applied_time_extras or {}
         self.granularity = granularity
-        self.from_dttm, self.to_dttm = utils.get_since_until(
+        self.from_dttm, self.to_dttm = get_since_until(
             relative_start=extras.get(
-                "relative_start", app.config["DEFAULT_RELATIVE_START_TIME"]
+                "relative_start", config["DEFAULT_RELATIVE_START_TIME"]
             ),
             relative_end=extras.get(
-                "relative_end", app.config["DEFAULT_RELATIVE_END_TIME"]
+                "relative_end", config["DEFAULT_RELATIVE_END_TIME"]
             ),
             time_range=time_range,
             time_shift=time_shift,
         )
-        self.is_timeseries = is_timeseries
+        # is_timeseries is True if time column is in groupby
+        self.is_timeseries = (
+            is_timeseries
+            if is_timeseries is not None
+            else (DTTM_ALIAS in groupby if groupby else False)
+        )
         self.time_range = time_range
-        self.time_shift = utils.parse_human_timedelta(time_shift)
-        self.post_processing = post_processing or []
+        self.time_shift = parse_human_timedelta(time_shift)
+        self.post_processing = [
+            post_proc for post_proc in post_processing or [] if post_proc
+        ]
         if not is_sip_38:
             self.groupby = groupby or []
 
-        # Temporary solution for backward compatibility issue due the new format of
-        # non-ad-hoc metric which needs to adhere to superset-ui per
-        # https://git.io/Jvm7P.
+        # Support metric reference/definition in the format of
+        #   1. 'metric_name'   - name of predefined metric
+        #   2. { label: 'label_name' }  - legacy format for a predefined metric
+        #   3. { expressionType: 'SIMPLE' | 'SQL', ... } - adhoc metric
         self.metrics = [
-            metric if "expressionType" in metric else metric["label"]  # type: ignore
+            metric
+            if isinstance(metric, str) or "expressionType" in metric
+            else metric["label"]  # type: ignore
             for metric in metrics
         ]
 
-        self.row_limit = row_limit
+        self.row_limit = row_limit or config["ROW_LIMIT"]
+        self.row_offset = row_offset or 0
         self.filter = filters or []
         self.timeseries_limit = timeseries_limit
         self.timeseries_limit_metric = timeseries_limit_metric
         self.order_desc = order_desc
         self.extras = extras
 
-        if app.config["SIP_15_ENABLED"] and "time_range_endpoints" not in self.extras:
+        if config["SIP_15_ENABLED"] and "time_range_endpoints" not in self.extras:
             self.extras["time_range_endpoints"] = get_time_range_endpoints(form_data={})
 
         self.columns = columns or []
         if is_sip_38 and groupby:
             self.columns += groupby
             logger.warning(
-                f"The field `groupby` is deprecated. Viz plugins should "
-                f"pass all selectables via the `columns` field"
+                "The field `groupby` is deprecated. Viz plugins should "
+                "pass all selectables via the `columns` field"
             )
 
         self.orderby = orderby or []
@@ -147,15 +180,18 @@ class QueryObject:
         for field in DEPRECATED_FIELDS:
             if field.old_name in kwargs:
                 logger.warning(
-                    f"The field `{field.old_name}` is deprecated, please use "
-                    f"`{field.new_name}` instead."
+                    "The field `%s` is deprecated, please use `%s` instead.",
+                    field.old_name,
+                    field.new_name,
                 )
                 value = kwargs[field.old_name]
                 if value:
                     if hasattr(self, field.new_name):
                         logger.warning(
-                            f"The field `{field.new_name}` is already populated, "
-                            f"replacing value with contents from `{field.old_name}`."
+                            "The field `%s` is already populated, "
+                            "replacing value with contents from `%s`.",
+                            field.new_name,
+                            field.old_name,
                         )
                     setattr(self, field.new_name, value)
 
@@ -163,16 +199,20 @@ class QueryObject:
         for field in DEPRECATED_EXTRAS_FIELDS:
             if field.old_name in kwargs:
                 logger.warning(
-                    f"The field `{field.old_name}` is deprecated and should be "
-                    f"passed to `extras` via the `{field.new_name}` property."
+                    "The field `%s` is deprecated and should "
+                    "be passed to `extras` via the `%s` property.",
+                    field.old_name,
+                    field.new_name,
                 )
                 value = kwargs[field.old_name]
                 if value:
                     if hasattr(self.extras, field.new_name):
                         logger.warning(
-                            f"The field `{field.new_name}` is already populated in "
-                            f"`extras`, replacing value with contents "
-                            f"from `{field.old_name}`."
+                            "The field `%s` is already populated in "
+                            "`extras`, replacing value with contents "
+                            "from `%s`.",
+                            field.new_name,
+                            field.old_name,
                         )
                     self.extras[field.new_name] = value
 
@@ -184,6 +224,7 @@ class QueryObject:
             "is_timeseries": self.is_timeseries,
             "metrics": self.metrics,
             "row_limit": self.row_limit,
+            "row_offset": self.row_offset,
             "filter": self.filter,
             "timeseries_limit": self.timeseries_limit,
             "timeseries_limit_metric": self.timeseries_limit_metric,
@@ -212,14 +253,35 @@ class QueryObject:
             del cache_dict[k]
         if self.time_range:
             cache_dict["time_range"] = self.time_range
-        json_data = self.json_dumps(cache_dict, sort_keys=True)
         if self.post_processing:
             cache_dict["post_processing"] = self.post_processing
+
+        annotation_fields = [
+            "annotationType",
+            "descriptionColumns",
+            "intervalEndColumn",
+            "name",
+            "overrides",
+            "sourceType",
+            "timeColumn",
+            "titleColumn",
+            "value",
+        ]
+        annotation_layers = [
+            {field: layer[field] for field in annotation_fields if field in layer}
+            for layer in self.annotation_layers
+        ]
+        # only add to key if there are annotations present that affect the payload
+        if annotation_layers:
+            cache_dict["annotation_layers"] = annotation_layers
+
+        json_data = self.json_dumps(cache_dict, sort_keys=True)
         return hashlib.md5(json_data.encode("utf-8")).hexdigest()
 
-    def json_dumps(self, obj: Any, sort_keys: bool = False) -> str:
+    @staticmethod
+    def json_dumps(obj: Any, sort_keys: bool = False) -> str:
         return json.dumps(
-            obj, default=utils.json_int_dttm_ser, ignore_nan=True, sort_keys=sort_keys
+            obj, default=json_int_dttm_ser, ignore_nan=True, sort_keys=sort_keys
         )
 
     def exec_post_processing(self, df: DataFrame) -> DataFrame:
@@ -229,7 +291,8 @@ class QueryObject:
         :param df: DataFrame returned from database model.
         :return: new DataFrame to which all post processing operations have been
                  applied
-        :raises ChartDataValidationError: If the post processing operation in incorrect
+        :raises QueryObjectValidationError: If the post processing operation
+                 is incorrect
         """
         for post_process in self.post_processing:
             operation = post_process.get("operation")

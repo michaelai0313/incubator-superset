@@ -18,93 +18,74 @@
  */
 import React from 'react';
 import PropTypes from 'prop-types';
-import { Label, OverlayTrigger } from 'react-bootstrap';
-import { thresholdScott } from 'd3-array';
-
-import AdhocMetricEditPopover from './AdhocMetricEditPopover';
 import AdhocMetric from '../AdhocMetric';
 import columnType from '../propTypes/columnType';
+import savedMetricType from '../propTypes/savedMetricType';
+import { DraggableOptionControlLabel } from './OptionControls';
+import AdhocMetricPopoverTrigger from './AdhocMetricPopoverTrigger';
+import { OPTION_TYPES } from './optionTypes';
 
 const propTypes = {
   adhocMetric: PropTypes.instanceOf(AdhocMetric),
   onMetricEdit: PropTypes.func.isRequired,
+  onRemoveMetric: PropTypes.func,
   columns: PropTypes.arrayOf(columnType),
-  multi: PropTypes.bool,
+  savedMetrics: PropTypes.arrayOf(savedMetricType),
+  savedMetric: savedMetricType,
   datasourceType: PropTypes.string,
+  onMoveLabel: PropTypes.func,
+  onDropLabel: PropTypes.func,
+  index: PropTypes.number,
 };
 
-export default class AdhocMetricOption extends React.PureComponent {
+class AdhocMetricOption extends React.PureComponent {
   constructor(props) {
     super(props);
-    this.closeMetricEditOverlay = this.closeMetricEditOverlay.bind(this);
-    this.onOverlayEntered = this.onOverlayEntered.bind(this);
-    this.onOverlayExited = this.onOverlayExited.bind(this);
-    this.onPopoverResize = this.onPopoverResize.bind(this);
-    this.state = { overlayShown: false };
-    this.overlay = null;
+    this.onRemoveMetric = this.onRemoveMetric.bind(this);
   }
 
-  onPopoverResize() {
-    this.forceUpdate();
-  }
-
-  onOverlayEntered() {
-    // isNew is used to indicate whether to automatically open the overlay
-    // once the overlay has been opened, the metric/filter will never be
-    // considered new again.
-    this.props.adhocMetric.isNew = false;
-    this.setState({ overlayShown: false });
-  }
-
-  onOverlayExited() {
-    this.setState({ overlayShown: false });
-  }
-
-  closeMetricEditOverlay() {
-    this.overlay.hide();
+  onRemoveMetric(e) {
+    e.stopPropagation();
+    this.props.onRemoveMetric();
   }
 
   render() {
-    const { adhocMetric } = this.props;
-    const overlayContent = (
-      <AdhocMetricEditPopover
-        onResize={this.onPopoverResize}
-        adhocMetric={adhocMetric}
-        onChange={this.props.onMetricEdit}
-        onClose={this.closeMetricEditOverlay}
-        columns={this.props.columns}
-        datasourceType={this.props.datasourceType}
-      />
-    );
-
+    const {
+      adhocMetric,
+      onMetricEdit,
+      columns,
+      savedMetrics,
+      savedMetric,
+      datasourceType,
+      onMoveLabel,
+      onDropLabel,
+      index,
+    } = this.props;
     return (
-      <div
-        className="metric-option"
-        onMouseDownCapture={e => e.stopPropagation()}
+      <AdhocMetricPopoverTrigger
+        adhocMetric={adhocMetric}
+        onMetricEdit={onMetricEdit}
+        columns={columns}
+        savedMetrics={savedMetrics}
+        savedMetric={savedMetric}
+        datasourceType={datasourceType}
       >
-        <OverlayTrigger
-          ref={ref => {
-            this.overlay = ref;
-          }}
-          placement="right"
-          trigger="click"
-          disabled
-          overlay={overlayContent}
-          rootClose
-          shouldUpdatePosition
-          defaultOverlayShown={adhocMetric.isNew}
-          onEntered={this.onOverlayEntered}
-          onExited={this.onOverlayExited}
-        >
-          <Label className="option-label adhoc-option">
-            {adhocMetric.label}
-            <i
-              className={`glyphicon glyphicon-triangle-right adhoc-label-arrow`}
-            />
-          </Label>
-        </OverlayTrigger>
-      </div>
+        <DraggableOptionControlLabel
+          savedMetric={savedMetric}
+          label={adhocMetric.label}
+          onRemove={this.onRemoveMetric}
+          onMoveLabel={onMoveLabel}
+          onDropLabel={onDropLabel}
+          index={index}
+          type={OPTION_TYPES.metric}
+          isAdhoc
+          isFunction
+        />
+      </AdhocMetricPopoverTrigger>
     );
   }
 }
+
+export default AdhocMetricOption;
+
 AdhocMetricOption.propTypes = propTypes;

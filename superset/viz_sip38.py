@@ -26,7 +26,6 @@ import hashlib
 import inspect
 import logging
 import math
-import pickle as pkl
 import re
 import uuid
 from collections import defaultdict, OrderedDict
@@ -34,7 +33,6 @@ from datetime import datetime, timedelta
 from itertools import product
 from typing import Any, Dict, List, Optional, Set, Tuple, TYPE_CHECKING
 
-import dataclasses
 import geohash
 import numpy as np
 import pandas as pd
@@ -44,10 +42,9 @@ from dateutil import relativedelta as rdelta
 from flask import request
 from flask_babel import lazy_gettext as _
 from geopy.point import Point
-from markdown import markdown
 from pandas.tseries.frequencies import to_offset
 
-from superset import app, cache, get_manifest_files, security_manager
+from superset import app
 from superset.constants import NULL_STRING
 from superset.errors import ErrorLevel, SupersetError, SupersetErrorType
 from superset.exceptions import (
@@ -55,15 +52,20 @@ from superset.exceptions import (
     QueryObjectValidationError,
     SpatialException,
 )
+from superset.extensions import cache_manager, security_manager
 from superset.models.helpers import QueryResult
 from superset.typing import QueryObjectDict, VizData, VizPayload
 from superset.utils import core as utils
+from superset.utils.cache import set_and_log_cache
 from superset.utils.core import (
     DTTM_ALIAS,
     JS_MAX_INTEGER,
     merge_extra_filters,
     to_adhoc,
 )
+
+import dataclasses  # isort:skip
+
 
 if TYPE_CHECKING:
     from superset.connectors.base.models import BaseDatasource
@@ -414,7 +416,7 @@ class BaseViz:
             and self.datasource.database.cache_timeout
         ) is not None:
             return self.datasource.database.cache_timeout
-        return config["CACHE_DEFAULT_TIMEOUT"]
+        return cache_manager.data_cache.config["CACHE_DEFAULT_TIMEOUT"]
 
     def get_json(self):
         return json.dumps(
@@ -445,7 +447,7 @@ class BaseViz:
         cache_dict["extra_cache_keys"] = self.datasource.get_extra_cache_keys(query_obj)
         cache_dict["rls"] = (
             security_manager.get_rls_ids(self.datasource)
-            if config["ENABLE_ROW_LEVEL_SECURITY"]
+            if config["ROW_LEVEL_SECURITY"]
             else []
         )
         cache_dict["changed_on"] = self.datasource.changed_on
@@ -476,12 +478,11 @@ class BaseViz:
         stacktrace = None
         df = None
         cached_dttm = datetime.utcnow().isoformat().split(".")[0]
-        if cache_key and cache and not self.force:
-            cache_value = cache.get(cache_key)
+        if cache_key and cache_manager.data_cache and not self.force:
+            cache_value = cache_manager.data_cache.get(cache_key)
             if cache_value:
                 stats_logger.incr("loading_from_cache")
                 try:
-                    cache_value = pkl.loads(cache_value)
                     df = cache_value["df"]
                     self.query = cache_value["query"]
                     self._any_cached_dttm = cache_value["dttm"]
@@ -517,28 +518,14 @@ class BaseViz:
                 self.status = utils.QueryStatus.FAILED
                 stacktrace = utils.get_stacktrace()
 
-            if (
-                is_loaded
-                and cache_key
-                and cache
-                and self.status != utils.QueryStatus.FAILED
-            ):
-                try:
-                    cache_value = dict(dttm=cached_dttm, df=df, query=self.query)
-                    cache_value = pkl.dumps(cache_value, protocol=pkl.HIGHEST_PROTOCOL)
-
-                    logger.info(
-                        "Caching {} chars at key {}".format(len(cache_value), cache_key)
-                    )
-
-                    stats_logger.incr("set_cache_key")
-                    cache.set(cache_key, cache_value, timeout=self.cache_timeout)
-                except Exception as ex:
-                    # cache.set call can fail if the backend is down or if
-                    # the key is too large or whatever other reasons
-                    logger.warning("Could not cache key {}".format(cache_key))
-                    logger.exception(ex)
-                    cache.delete(cache_key)
+            if is_loaded and cache_key and self.status != utils.QueryStatus.FAILED:
+                set_and_log_cache(
+                    cache_manager.data_cache,
+                    cache_key,
+                    {"df": df, "query": self.query},
+                    self.cache_timeout,
+                    self.datasource.uid,
+                )
 
         return {
             "cache_key": self._any_cache_key,
@@ -591,6 +578,15 @@ class BaseViz:
     @property
     def json_data(self):
         return json.dumps(self.data)
+
+    def raise_for_access(self) -> None:
+        """
+        Raise an exception if the user cannot access the resource.
+
+        :raises SupersetSecurityException: If the user cannot access the resource
+        """
+
+        security_manager.raise_for_access(viz=self)
 
 
 class TableViz(BaseViz):
@@ -830,36 +826,6 @@ class PivotTableViz(BaseViz):
                 ).split(" "),
             ),
         )
-
-
-class MarkupViz(BaseViz):
-
-    """Use html or markdown to create a free form widget"""
-
-    viz_type = "markup"
-    verbose_name = _("Markup")
-    is_timeseries = False
-
-    def query_obj(self):
-        return None
-
-    def get_df(self, query_obj: Optional[Dict[str, Any]] = None) -> pd.DataFrame:
-        return pd.DataFrame()
-
-    def get_data(self, df: pd.DataFrame) -> VizData:
-        markup_type = self.form_data.get("markup_type")
-        code = self.form_data.get("code", "")
-        if markup_type == "markdown":
-            code = markdown(code)
-        return dict(html=code, theme_css=get_manifest_files("theme", "css"))
-
-
-class SeparatorViz(MarkupViz):
-
-    """Use to create section headers in a dashboard, similar to `Markup`"""
-
-    viz_type = "separator"
-    verbose_name = _("Separator")
 
 
 class TreemapViz(BaseViz):
@@ -1306,8 +1272,8 @@ class NVD3TimeSeriesViz(NVD3Viz):
             if not query_object["from_dttm"] or not query_object["to_dttm"]:
                 raise QueryObjectValidationError(
                     _(
-                        "`Since` and `Until` time bounds should be specified "
-                        "when using the `Time Shift` feature."
+                        "An enclosed time range (both start and end) must be specified "
+                        "when using a Time Comparison."
                     )
                 )
             query_object["from_dttm"] -= delta
@@ -1385,8 +1351,8 @@ class MultiLineViz(NVD3Viz):
     def get_data(self, df: pd.DataFrame) -> VizData:
         fd = self.form_data
         # Late imports to avoid circular import issues
-        from superset.models.slice import Slice
         from superset import db
+        from superset.models.slice import Slice
 
         slice_ids1 = fd.get("line_charts")
         slices1 = db.session.query(Slice).filter(Slice.id.in_(slice_ids1)).all()
@@ -2203,8 +2169,8 @@ class DeckGLMultiLayer(BaseViz):
     def get_data(self, df: pd.DataFrame) -> VizData:
         fd = self.form_data
         # Late imports to avoid circular import issues
-        from superset.models.slice import Slice
         from superset import db
+        from superset.models.slice import Slice
 
         slice_ids = fd.get("deck_slices")
         slices = db.session.query(Slice).filter(Slice.id.in_(slice_ids)).all()
@@ -2232,7 +2198,7 @@ class BaseDeckGLViz(BaseViz):
             return None
         try:
             p = Point(s)
-            return (p.latitude, p.longitude)  # pylint: disable=no-member
+            return (p.latitude, p.longitude)
         except Exception:
             raise SpatialException(_("Invalid spatial point encountered: %s" % s))
 
@@ -2852,6 +2818,6 @@ viz_types = {
     if (
         inspect.isclass(o)
         and issubclass(o, BaseViz)
-        and o.viz_type not in config["VIZ_TYPE_BLACKLIST"]
+        and o.viz_type not in config["VIZ_TYPE_DENYLIST"]
     )
 }

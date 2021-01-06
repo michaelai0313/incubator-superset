@@ -21,7 +21,16 @@ import { mount, shallow } from 'enzyme';
 
 import ModalTrigger from 'src/components/ModalTrigger';
 import RefreshIntervalModal from 'src/dashboard/components/RefreshIntervalModal';
-import { Modal, Alert } from 'react-bootstrap';
+import { Alert } from 'react-bootstrap';
+import { supersetTheme, ThemeProvider } from '@superset-ui/core';
+
+const getMountWrapper = props =>
+  mount(<RefreshIntervalModal {...props} />, {
+    wrappingComponent: ThemeProvider,
+    wrappingComponentProps: {
+      theme: supersetTheme,
+    },
+  });
 
 describe('RefreshIntervalModal', () => {
   const mockedProps = {
@@ -36,15 +45,15 @@ describe('RefreshIntervalModal', () => {
     ).toBe(true);
   });
   it('renders the trigger node', () => {
-    const wrapper = mount(<RefreshIntervalModal {...mockedProps} />);
-    expect(wrapper.find('.fa-edit')).toHaveLength(1);
+    const wrapper = getMountWrapper(mockedProps);
+    expect(wrapper.find('.fa-edit')).toExist();
   });
   it('should render a interval seconds', () => {
-    const wrapper = mount(<RefreshIntervalModal {...mockedProps} />);
+    const wrapper = getMountWrapper(mockedProps);
     expect(wrapper.prop('refreshFrequency')).toEqual(10);
   });
   it('should change refreshFrequency with edit mode', () => {
-    const wrapper = mount(<RefreshIntervalModal {...mockedProps} />);
+    const wrapper = getMountWrapper(mockedProps);
     wrapper.instance().handleFrequencyChange({ value: 30 });
     wrapper.instance().onSave();
     expect(mockedProps.onChange).toHaveBeenCalled();
@@ -59,9 +68,9 @@ describe('RefreshIntervalModal', () => {
 
     const wrapper = shallow(<RefreshIntervalModal {...props} />);
     wrapper.instance().handleFrequencyChange({ value: 30 });
-    expect(wrapper.find(ModalTrigger).dive().find(Alert)).toHaveLength(1);
+    expect(wrapper.find(ModalTrigger).dive().find(Alert)).toExist();
 
     wrapper.instance().handleFrequencyChange({ value: 3601 });
-    expect(wrapper.find(ModalTrigger).dive().find(Alert)).toHaveLength(0);
+    expect(wrapper.find(ModalTrigger).dive().find(Alert)).not.toExist();
   });
 });

@@ -18,7 +18,7 @@ import json
 import re
 from typing import Any, Dict, Union
 
-from marshmallow import fields, pre_load, Schema
+from marshmallow import fields, post_load, Schema
 from marshmallow.validate import Length, ValidationError
 
 from superset.exceptions import SupersetException
@@ -26,6 +26,7 @@ from superset.utils import core as utils
 
 get_delete_ids_schema = {"type": "array", "items": {"type": "integer"}}
 get_export_ids_schema = {"type": "array", "items": {"type": "integer"}}
+get_fav_star_ids_schema = {"type": "array", "items": {"type": "integer"}}
 thumbnail_query_schema = {
     "type": "object",
     "properties": {"force": {"type": "boolean"}},
@@ -75,7 +76,6 @@ openapi_spec_methods_override = {
         "get": {"description": "Get a list of all possible owners for a dashboard."}
     },
 }
-""" Overrides GET methods OpenApi descriptions """
 
 
 def validate_json(value: Union[bytes, bytearray, str]) -> None:
@@ -92,30 +92,38 @@ def validate_json_metadata(value: Union[bytes, bytearray, str]) -> None:
         value_obj = json.loads(value)
     except json.decoder.JSONDecodeError:
         raise ValidationError("JSON not valid")
-    errors = DashboardJSONMetadataSchema(strict=True).validate(value_obj, partial=False)
+    errors = DashboardJSONMetadataSchema().validate(value_obj, partial=False)
     if errors:
         raise ValidationError(errors)
 
 
 class DashboardJSONMetadataSchema(Schema):
+    # filter_configuration is for dashboard-native filters
+    filter_configuration = fields.List(fields.Dict(), allow_none=True)
     timed_refresh_immune_slices = fields.List(fields.Integer())
+    # deprecated wrt dashboard-native filters
     filter_scopes = fields.Dict()
     expanded_slices = fields.Dict()
     refresh_frequency = fields.Integer()
+    # deprecated wrt dashboard-native filters
     default_filters = fields.Str()
     stagger_refresh = fields.Boolean()
     stagger_time = fields.Integer()
-    color_scheme = fields.Str()
+    color_scheme = fields.Str(allow_none=True)
     label_colors = fields.Dict()
 
 
 class BaseDashboardSchema(Schema):
-    @pre_load
-    def pre_load(self, data: Dict[str, Any]) -> None:  # pylint: disable=no-self-use
+    # pylint: disable=no-self-use,unused-argument
+    @post_load
+    def post_load(self, data: Dict[str, Any], **kwargs: Any) -> Dict[str, Any]:
         if data.get("slug"):
             data["slug"] = data["slug"].strip()
             data["slug"] = data["slug"].replace(" ", "-")
             data["slug"] = re.sub(r"[^\w\-]+", "", data["slug"])
+        return data
+
+    # pylint: disable=no-self-use,unused-argument
 
 
 class DashboardPostSchema(BaseDashboardSchema):
@@ -133,7 +141,7 @@ class DashboardPostSchema(BaseDashboardSchema):
     )
     css = fields.String()
     json_metadata = fields.String(
-        description=json_metadata_description, validate=validate_json_metadata
+        description=json_metadata_description, validate=validate_json_metadata,
     )
     published = fields.Boolean(description=published_description)
 
@@ -160,3 +168,26 @@ class DashboardPutSchema(BaseDashboardSchema):
         validate=validate_json_metadata,
     )
     published = fields.Boolean(description=published_description, allow_none=True)
+
+
+class ChartFavStarResponseResult(Schema):
+    id = fields.Integer(description="The Chart id")
+    value = fields.Boolean(description="The FaveStar value")
+
+
+class GetFavStarIdsSchema(Schema):
+    result = fields.List(
+        fields.Nested(ChartFavStarResponseResult),
+        description="A list of results for each corresponding chart in the request",
+    )
+
+
+class ImportV1DashboardSchema(Schema):
+    dashboard_title = fields.String(required=True)
+    description = fields.String(allow_none=True)
+    css = fields.String(allow_none=True)
+    slug = fields.String(allow_none=True)
+    uuid = fields.UUID(required=True)
+    position = fields.Dict()
+    metadata = fields.Dict()
+    version = fields.String(required=True)

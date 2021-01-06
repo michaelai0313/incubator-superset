@@ -16,20 +16,22 @@
  * specific language governing permissions and limitations
  * under the License.
  */
+
+import { useCallback, useEffect } from 'react';
 /* eslint camelcase: 0 */
 import URI from 'urijs';
-import { SupersetClient } from '@superset-ui/connection';
-import { allowCrossDomain, availableDomains } from 'src/utils/hostNamesConfig';
-import { safeStringify } from 'src/utils/safeStringify';
 import {
+  buildQueryContext,
   getChartBuildQueryRegistry,
   getChartMetadataRegistry,
-} from '@superset-ui/chart';
+} from '@superset-ui/core';
+import { availableDomains } from 'src/utils/hostNamesConfig';
+import { safeStringify } from 'src/utils/safeStringify';
 
 const MAX_URL_LENGTH = 8000;
 
 export function getChartKey(explore) {
-  const slice = explore.slice;
+  const { slice } = explore;
   return slice ? slice.slice_id : 0;
 }
 
@@ -117,9 +119,9 @@ export function getChartDataUri({ path, qs, allowDomainSharding = false }) {
   // but can be specified with curUrl (used for unit tests to spoof
   // the window.location).
   let uri = new URI({
-    protocol: location.protocol.slice(0, -1),
+    protocol: window.location.protocol.slice(0, -1),
     hostname: getHostName(allowDomainSharding),
-    port: location.port ? location.port : '',
+    port: window.location.port ? window.location.port : '',
     path,
   });
   if (qs) {
@@ -193,15 +195,29 @@ export function getExploreUrl({
 }
 
 export const shouldUseLegacyApi = formData => {
-  const { useLegacyApi } = getChartMetadataRegistry().get(formData.viz_type);
-  return useLegacyApi || false;
+  const vizMetadata = getChartMetadataRegistry().get(formData.viz_type);
+  return vizMetadata ? vizMetadata.useLegacyApi : false;
 };
 
-export const buildV1ChartDataPayload = ({ formData, force }) => {
-  const buildQuery = getChartBuildQueryRegistry().get(formData.viz_type);
+export const buildV1ChartDataPayload = ({
+  formData,
+  force,
+  resultFormat,
+  resultType,
+}) => {
+  const buildQuery =
+    getChartBuildQueryRegistry().get(formData.viz_type) ??
+    (buildQueryformData =>
+      buildQueryContext(buildQueryformData, baseQueryObject => [
+        {
+          ...baseQueryObject,
+        },
+      ]));
   return buildQuery({
     ...formData,
     force,
+    result_format: resultFormat,
+    result_type: resultType,
   });
 };
 
@@ -234,6 +250,14 @@ export function postForm(url, payload, target = '_blank') {
   document.body.removeChild(hiddenForm);
 }
 
+export function getDataTablePageSize(columnsLength) {
+  let pageSize;
+  if (columnsLength) {
+    pageSize = Math.ceil(Math.max(5, 10000 / columnsLength));
+  }
+  return pageSize || 50;
+}
+
 export const exportChart = ({
   formData,
   resultFormat = 'json',
@@ -252,13 +276,12 @@ export const exportChart = ({
     payload = formData;
   } else {
     url = '/api/v1/chart/data';
-    const buildQuery = getChartBuildQueryRegistry().get(formData.viz_type);
-    payload = buildQuery({
-      ...formData,
+    payload = buildV1ChartDataPayload({
+      formData,
       force,
+      resultFormat,
+      resultType,
     });
-    payload.result_type = resultType;
-    payload.result_format = resultFormat;
   }
   postForm(url, payload);
 };
@@ -270,4 +293,18 @@ export const exploreChart = formData => {
     allowDomainSharding: false,
   });
   postForm(url, formData);
+};
+
+export const useDebouncedEffect = (effect, delay) => {
+  const callback = useCallback(effect, [effect]);
+
+  useEffect(() => {
+    const handler = setTimeout(() => {
+      callback();
+    }, delay);
+
+    return () => {
+      clearTimeout(handler);
+    };
+  }, [callback, delay]);
 };

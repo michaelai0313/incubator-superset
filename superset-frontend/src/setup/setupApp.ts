@@ -18,8 +18,9 @@
  */
 /* eslint global-require: 0 */
 import $ from 'jquery';
-import { SupersetClient } from '@superset-ui/connection';
-import getClientErrorObject, {
+import { SupersetClient } from '@superset-ui/core';
+import {
+  getClientErrorObject,
   ClientErrorObject,
 } from '../utils/getClientErrorObject';
 import setupErrorMessages from './setupErrorMessages';
@@ -31,7 +32,7 @@ function showApiMessage(resp: ClientErrorObject) {
     'data-dismiss="alert">\xD7</button> </div>';
   const severity = resp.severity || 'info';
   $(template)
-    .addClass('alert-' + severity)
+    .addClass(`alert-${severity}`)
     .append(resp.message || '')
     .appendTo($('#alert-container'));
 }
@@ -58,7 +59,7 @@ export default function setupApp() {
       const $this = $(this);
       const prefix = $this.data('checkbox-api-prefix');
       const id = $this.attr('id');
-      toggleCheckbox(prefix, '#' + id);
+      toggleCheckbox(prefix, `#${id}`);
     });
 
     // for language picker dropdown
@@ -75,16 +76,14 @@ export default function setupApp() {
         url: ev.currentTarget.href,
         parseMethod: null,
       }).then(() => {
-        location.reload();
+        window.location.reload();
       });
     });
   });
 
   // A set of hacks to allow apps to run within a FAB template
   // this allows for the server side generated menus to function
-  // @ts-ignore
   window.$ = $;
-  // @ts-ignore
   window.jQuery = $;
   require('bootstrap');
 

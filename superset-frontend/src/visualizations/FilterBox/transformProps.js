@@ -24,8 +24,9 @@ export default function transformProps(chartProps) {
     formData,
     hooks,
     initialValues,
-    queryData,
+    queriesData,
     rawDatasource,
+    rawFormData,
   } = chartProps;
   const {
     onAddFilter = NOOP,
@@ -53,7 +54,7 @@ export default function transformProps(chartProps) {
   return {
     chartId: sliceId,
     datasource: rawDatasource,
-    filtersChoices: queryData.data,
+    filtersChoices: queriesData[0].data,
     filtersFields,
     instantFiltering,
     onChange: onAddFilter,
@@ -65,5 +66,7 @@ export default function transformProps(chartProps) {
     showDruidTimeOrigin,
     showSqlaTimeColumn,
     showSqlaTimeGrain: showSqlaTimeGranularity,
+    // the original form data, needed for async select options
+    rawFormData,
   };
 }

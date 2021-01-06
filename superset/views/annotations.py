@@ -17,14 +17,17 @@
 from typing import Any, Dict
 
 from flask_appbuilder import CompactCRUDMixin
+from flask_appbuilder.api import expose
 from flask_appbuilder.models.sqla.interface import SQLAInterface
+from flask_appbuilder.security.decorators import has_access
 from flask_babel import lazy_gettext as _
 from wtforms.validators import StopValidation
 
-from superset.constants import RouteMethod
+from superset import is_feature_enabled
+from superset.constants import MODEL_VIEW_RW_METHOD_PERMISSION_MAP, RouteMethod
 from superset.models.annotations import Annotation, AnnotationLayer
-
-from .base import SupersetModelView
+from superset.typing import FlaskResponse
+from superset.views.base import SupersetModelView
 
 
 class StartEndDttmValidator:  # pylint: disable=too-few-public-methods
@@ -35,7 +38,7 @@ class StartEndDttmValidator:  # pylint: disable=too-few-public-methods
     def __call__(self, form: Dict[str, Any], field: Any) -> None:
         if not form["start_dttm"].data and not form["end_dttm"].data:
             raise StopValidation(_("annotation start time or end time is required."))
-        elif (
+        if (
             form["end_dttm"].data
             and form["start_dttm"].data
             and form["end_dttm"].data < form["start_dttm"].data
@@ -49,7 +52,10 @@ class AnnotationModelView(
     SupersetModelView, CompactCRUDMixin
 ):  # pylint: disable=too-many-ancestors
     datamodel = SQLAInterface(Annotation)
-    include_route_methods = RouteMethod.CRUD_SET
+    include_route_methods = RouteMethod.CRUD_SET | {"annotation"}
+
+    class_permission_name = "Annotation"
+    method_permission_name = MODEL_VIEW_RW_METHOD_PERMISSION_MAP
 
     list_title = _("Annotations")
     show_title = _("Show Annotation")
@@ -93,18 +99,38 @@ class AnnotationModelView(
     def pre_update(self, item: "AnnotationModelView") -> None:
         self.pre_add(item)
 
+    @expose("/<pk>/annotation/", methods=["GET"])
+    @has_access
+    def annotation(self, pk: int) -> FlaskResponse:  # pylint: disable=unused-argument
+        if not is_feature_enabled("ENABLE_REACT_CRUD_VIEWS"):
+            return super().list()
+
+        return super().render_app_template()
+
 
 class AnnotationLayerModelView(SupersetModelView):  # pylint: disable=too-many-ancestors
     datamodel = SQLAInterface(AnnotationLayer)
     include_route_methods = RouteMethod.CRUD_SET | {RouteMethod.API_READ}
     related_views = [AnnotationModelView]
+
+    class_permission_name = "Annotation"
+    method_permission_name = MODEL_VIEW_RW_METHOD_PERMISSION_MAP
+
     list_title = _("Annotation Layers")
     show_title = _("Show Annotation Layer")
     add_title = _("Add Annotation Layer")
     edit_title = _("Edit Annotation Layer")
 
-    list_columns = ["name", "descr"]
+    list_columns = ["id", "name", "descr"]
     edit_columns = ["name", "descr"]
     add_columns = edit_columns
 
     label_columns = {"name": _("Name"), "descr": _("Description")}
+
+    @expose("/list/")
+    @has_access
+    def list(self) -> FlaskResponse:
+        if not is_feature_enabled("ENABLE_REACT_CRUD_VIEWS"):
+            return super().list()
+
+        return super().render_app_template()

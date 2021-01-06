@@ -20,7 +20,7 @@ import React from 'react';
 import { connect } from 'react-redux';
 import { bindActionCreators } from 'redux';
 import PropTypes from 'prop-types';
-import { t } from '@superset-ui/translation';
+import { styled, t } from '@superset-ui/core';
 
 import { chartPropShape } from '../../dashboard/util/propShapes';
 import ExploreActionButtons from './ExploreActionButtons';
@@ -45,6 +45,7 @@ const propTypes = {
   addHistory: PropTypes.func,
   can_overwrite: PropTypes.bool.isRequired,
   can_download: PropTypes.bool.isRequired,
+  chartHeight: PropTypes.string.isRequired,
   isStarred: PropTypes.bool.isRequired,
   slice: PropTypes.object,
   sliceName: PropTypes.string,
@@ -54,13 +55,46 @@ const propTypes = {
   chart: chartPropShape,
 };
 
+const StyledHeader = styled.div`
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: space-between;
+
+  span[role='button'] {
+    display: flex;
+    height: 100%;
+  }
+
+  .title-panel {
+    display: flex;
+    align-items: center;
+  }
+
+  .right-button-panel {
+    display: flex;
+    align-items: center;
+
+    > .btn-group {
+      flex: 0 0 auto;
+      margin-left: ${({ theme }) => theme.gridUnit}px;
+    }
+  }
+`;
+
+const StyledButtons = styled.span`
+  display: flex;
+  align-items: center;
+`;
+
 export class ExploreChartHeader extends React.PureComponent {
   constructor(props) {
     super(props);
     this.state = {
       isPropertiesModalOpen: false,
     };
-    this.openProperiesModal = this.openProperiesModal.bind(this);
+    this.openPropertiesModal = this.openPropertiesModal.bind(this);
     this.closePropertiesModal = this.closePropertiesModal.bind(this);
   }
 
@@ -77,7 +111,7 @@ export class ExploreChartHeader extends React.PureComponent {
     );
   }
 
-  openProperiesModal() {
+  openPropertiesModal() {
     this.setState({
       isPropertiesModalOpen: true,
     });
@@ -96,55 +130,61 @@ export class ExploreChartHeader extends React.PureComponent {
       chartUpdateEndTime,
       chartUpdateStartTime,
       latestQueryFormData,
-      queryResponse,
+      queriesResponse,
     } = this.props.chart;
+    // TODO: when will get appropriate design for multi queries use all results and not first only
+    const queryResponse = queriesResponse?.[0];
     const chartFinished = ['failed', 'rendered', 'success'].includes(
       this.props.chart.chartStatus,
     );
     return (
-      <div id="slice-header" className="clearfix panel-title-large">
-        <EditableTitle
-          title={this.getSliceName()}
-          canEdit={!this.props.slice || this.props.can_overwrite}
-          onSaveTitle={this.props.actions.updateChartTitle}
-        />
-
-        {this.props.slice && (
-          <span>
-            <FaveStar
-              itemId={this.props.slice.slice_id}
-              fetchFaveStar={this.props.actions.fetchFaveStar}
-              saveFaveStar={this.props.actions.saveFaveStar}
-              isStarred={this.props.isStarred}
-            />
-            <PropertiesModal
-              show={this.state.isPropertiesModalOpen}
-              onHide={this.closePropertiesModal}
-              onSave={this.props.sliceUpdated}
-              slice={this.props.slice}
-            />
-            <TooltipWrapper
-              label="edit-desc"
-              tooltip={t('Edit chart properties')}
-            >
-              <span
-                role="button"
-                tabIndex={0}
-                className="edit-desc-icon"
-                onClick={this.openProperiesModal}
-              >
-                <i className="fa fa-edit" />
-              </span>
-            </TooltipWrapper>
-          </span>
-        )}
-        {this.props.chart.sliceFormData && (
-          <AlteredSliceTag
-            origFormData={this.props.chart.sliceFormData}
-            currentFormData={formData}
+      <StyledHeader id="slice-header" className="panel-title-large">
+        <div className="title-panel">
+          <EditableTitle
+            title={this.getSliceName()}
+            canEdit={!this.props.slice || this.props.can_overwrite}
+            onSaveTitle={this.props.actions.updateChartTitle}
           />
-        )}
-        <div className="pull-right">
+
+          {this.props.slice && (
+            <StyledButtons>
+              <FaveStar
+                itemId={this.props.slice.slice_id}
+                fetchFaveStar={this.props.actions.fetchFaveStar}
+                saveFaveStar={this.props.actions.saveFaveStar}
+                isStarred={this.props.isStarred}
+                showTooltip
+              />
+              <PropertiesModal
+                show={this.state.isPropertiesModalOpen}
+                onHide={this.closePropertiesModal}
+                onSave={this.props.sliceUpdated}
+                slice={this.props.slice}
+              />
+              <TooltipWrapper
+                label="edit-desc"
+                tooltip={t('Edit chart properties')}
+              >
+                <span
+                  role="button"
+                  tabIndex={0}
+                  className="edit-desc-icon"
+                  onClick={this.openPropertiesModal}
+                >
+                  <i className="fa fa-edit" />
+                </span>
+              </TooltipWrapper>
+              {this.props.chart.sliceFormData && (
+                <AlteredSliceTag
+                  className="altered"
+                  origFormData={this.props.chart.sliceFormData}
+                  currentFormData={formData}
+                />
+              )}
+            </StyledButtons>
+          )}
+        </div>
+        <div className="right-button-panel">
           {chartFinished && queryResponse && (
             <RowCountLabel
               rowcount={Number(queryResponse.rowcount) || 0}
@@ -162,18 +202,21 @@ export class ExploreChartHeader extends React.PureComponent {
             endTime={chartUpdateEndTime}
             isRunning={chartStatus === 'loading'}
             status={CHART_STATUS_MAP[chartStatus]}
-            style={{ fontSize: '10px', marginRight: '5px' }}
           />
           <ExploreActionButtons
-            actions={this.props.actions}
+            actions={{
+              ...this.props.actions,
+              openPropertiesModal: this.openPropertiesModal,
+            }}
             slice={this.props.slice}
             canDownload={this.props.can_download}
             chartStatus={chartStatus}
+            chartHeight={this.props.chartHeight}
             latestQueryFormData={latestQueryFormData}
             queryResponse={queryResponse}
           />
         </div>
-      </div>
+      </StyledHeader>
     );
   }
 }

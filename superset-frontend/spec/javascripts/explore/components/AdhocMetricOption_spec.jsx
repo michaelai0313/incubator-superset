@@ -20,8 +20,8 @@
 import React from 'react';
 import sinon from 'sinon';
 import { shallow } from 'enzyme';
-import { Label, OverlayTrigger } from 'react-bootstrap';
 
+import Popover from 'src/common/components/Popover';
 import AdhocMetric from 'src/explore/AdhocMetric';
 import AdhocMetricOption from 'src/explore/components/AdhocMetricOption';
 import { AGGREGATES } from 'src/explore/constants';
@@ -41,25 +41,45 @@ function setup(overrides) {
   const onMetricEdit = sinon.spy();
   const props = {
     adhocMetric: sumValueAdhocMetric,
+    savedMetric: {},
+    savedMetrics: [],
     onMetricEdit,
     columns,
+    onMoveLabel: () => {},
+    onDropLabel: () => {},
+    index: 0,
     ...overrides,
   };
-  const wrapper = shallow(<AdhocMetricOption {...props} />);
+  const wrapper = shallow(<AdhocMetricOption {...props} />)
+    .find('AdhocMetricPopoverTrigger')
+    .shallow();
   return { wrapper, onMetricEdit };
 }
 
 describe('AdhocMetricOption', () => {
   it('renders an overlay trigger wrapper for the label', () => {
     const { wrapper } = setup();
-    expect(wrapper.find(OverlayTrigger)).toHaveLength(1);
-    expect(wrapper.find(Label)).toHaveLength(1);
+    expect(wrapper.find(Popover)).toExist();
+    expect(wrapper.find('DraggableOptionControlLabel')).toExist();
   });
 
-  it('overlay should open if metric is new', () => {
-    const { wrapper } = setup({
-      adhocMetric: sumValueAdhocMetric.duplicateWith({ isNew: true }),
-    });
-    expect(wrapper.find(OverlayTrigger).props().defaultOverlayShown).toBe(true);
+  it('overwrites the adhocMetric in state with onLabelChange', () => {
+    const { wrapper } = setup();
+    wrapper.instance().onLabelChange({ target: { value: 'new label' } });
+    expect(wrapper.state('title').label).toBe('new label');
+    expect(wrapper.state('title').hasCustomLabel).toBe(true);
+  });
+
+  it('returns to default labels when the custom label is cleared', () => {
+    const { wrapper } = setup();
+    expect(wrapper.state('title').label).toBe('SUM(value)');
+
+    wrapper.instance().onLabelChange({ target: { value: 'new label' } });
+    expect(wrapper.state('title').label).toBe('new label');
+
+    wrapper.instance().onLabelChange({ target: { value: '' } });
+
+    expect(wrapper.state('title').label).toBe('SUM(value)');
+    expect(wrapper.state('title').hasCustomLabel).toBe(false);
   });
 });

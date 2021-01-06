@@ -15,6 +15,7 @@
 # specific language governing permissions and limitations
 # under the License.
 import json
+from enum import Enum
 from typing import Any, Dict, Hashable, List, Optional, Type, Union
 
 from flask_appbuilder.security.sqla.models import User
@@ -22,8 +23,9 @@ from sqlalchemy import and_, Boolean, Column, Integer, String, Text
 from sqlalchemy.ext.declarative import declared_attr
 from sqlalchemy.orm import foreign, Query, relationship, RelationshipProperty
 
+from superset import security_manager
 from superset.constants import NULL_STRING
-from superset.models.helpers import AuditMixinNullable, ImportMixin, QueryResult
+from superset.models.helpers import AuditMixinNullable, ImportExportMixin, QueryResult
 from superset.models.slice import Slice
 from superset.typing import FilterValue, FilterValues, QueryObjectDict
 from superset.utils import core as utils
@@ -51,8 +53,13 @@ COLUMN_FORM_DATA_PARAMS = [
 ]
 
 
+class DatasourceKind(str, Enum):
+    VIRTUAL = "virtual"
+    PHYSICAL = "physical"
+
+
 class BaseDatasource(
-    AuditMixinNullable, ImportMixin
+    AuditMixinNullable, ImportExportMixin
 ):  # pylint: disable=too-many-public-methods
     """A common interface to objects that are queryable
     (tables and datasources)"""
@@ -78,6 +85,9 @@ class BaseDatasource(
     # Used to do code highlighting when displaying the query in the UI
     query_language: Optional[str] = None
 
+    # Only some datasources support Row Level Security
+    is_rls_supported: bool = False
+
     @property
     def name(self) -> str:
         # can be a Column or a property pointing to one
@@ -101,6 +111,13 @@ class BaseDatasource(
     owners: List[User]
     update_from_object_fields: List[str]
 
+    @property
+    def kind(self) -> str:
+        if self.sql:
+            return DatasourceKind.VIRTUAL.value
+
+        return DatasourceKind.PHYSICAL.value
+
     @declared_attr
     def slices(self) -> RelationshipProperty:
         return relationship(
@@ -111,10 +128,8 @@ class BaseDatasource(
             ),
         )
 
-    # placeholder for a relationship to a derivative of BaseColumn
-    columns: List[Any] = []
-    # placeholder for a relationship to a derivative of BaseMetric
-    metrics: List[Any] = []
+    columns: List["BaseColumn"] = []
+    metrics: List["BaseMetric"] = []
 
     @property
     def type(self) -> str:
@@ -230,6 +245,7 @@ class BaseDatasource(
             "filter_select_enabled": self.filter_select_enabled,
             "name": self.name,
             "datasource_name": self.datasource_name,
+            "table_name": self.datasource_name,
             "type": self.type,
             "schema": self.schema,
             "offset": self.offset,
@@ -332,7 +348,7 @@ class BaseDatasource(
                     value = utils.cast_to_num(value)
                 if value == NULL_STRING:
                     return None
-                elif value == "<empty string>":
+                if value == "<empty string>":
                     return ""
             return value
 
@@ -393,7 +409,7 @@ class BaseDatasource(
         fkmany: List[Column],
         fkmany_class: Type[Union["BaseColumn", "BaseMetric"]],
         key_attr: str,
-    ) -> List[Column]:  # pylint: disable=too-many-locals
+    ) -> List[Column]:
         """Update ORM one-to-many list from object list
 
         Used for syncing metrics and columns using the same code"""
@@ -464,7 +480,7 @@ class BaseDatasource(
     def get_extra_cache_keys(  # pylint: disable=no-self-use
         self, query_obj: QueryObjectDict  # pylint: disable=unused-argument
     ) -> List[Hashable]:
-        """ If a datasource needs to provide additional keys for calculation of
+        """If a datasource needs to provide additional keys for calculation of
         cache keys, those can be provided via this method
 
         :param query_obj: The dict representation of a query object
@@ -480,8 +496,17 @@ class BaseDatasource(
             return NotImplemented
         return self.uid == other.uid
 
+    def raise_for_access(self) -> None:
+        """
+        Raise an exception if the user cannot access the resource.
 
-class BaseColumn(AuditMixinNullable, ImportMixin):
+        :raises SupersetSecurityException: If the user cannot access the resource
+        """
+
+        security_manager.raise_for_access(datasource=self)
+
+
+class BaseColumn(AuditMixinNullable, ImportExportMixin):
     """Interface for column"""
 
     __tablename__: Optional[str] = None  # {connector_name}_column
@@ -500,7 +525,7 @@ class BaseColumn(AuditMixinNullable, ImportMixin):
     export_fields: List[Any] = []
 
     def __repr__(self) -> str:
-        return self.column_name
+        return str(self.column_name)
 
     num_types = (
         "DOUBLE",
@@ -553,7 +578,7 @@ class BaseColumn(AuditMixinNullable, ImportMixin):
         return {s: getattr(self, s) for s in attrs if hasattr(self, s)}
 
 
-class BaseMetric(AuditMixinNullable, ImportMixin):
+class BaseMetric(AuditMixinNullable, ImportExportMixin):
 
     """Interface for Metrics"""
 

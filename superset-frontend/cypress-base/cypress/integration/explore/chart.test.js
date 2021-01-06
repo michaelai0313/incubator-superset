@@ -25,7 +25,7 @@ describe('No Results', () => {
     cy.route('POST', '/superset/explore_json/**').as('getJson');
   });
 
-  it('No results  message shows up', () => {
+  it('No results message shows up', () => {
     const formData = {
       ...FORM_DATA_DEFAULTS,
       metrics: [NUM_METRIC],
@@ -34,7 +34,7 @@ describe('No Results', () => {
         {
           expressionType: 'SIMPLE',
           subject: 'state',
-          operator: 'in',
+          operator: 'IN',
           comparator: ['Fake State'],
           clause: 'WHERE',
           sqlExpression: null,

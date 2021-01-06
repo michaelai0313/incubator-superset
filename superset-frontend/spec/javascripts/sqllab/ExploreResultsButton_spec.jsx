@@ -24,7 +24,6 @@ import sinon from 'sinon';
 import fetchMock from 'fetch-mock';
 import shortid from 'shortid';
 import sqlLabReducer from 'src/SqlLab/reducers/index';
-import * as actions from 'src/SqlLab/actions/sqlLab';
 import ExploreResultsButton from 'src/SqlLab/components/ExploreResultsButton';
 import * as exploreUtils from 'src/explore/exploreUtils';
 import Button from 'src/components/Button';
@@ -65,18 +64,16 @@ describe('ExploreResultsButton', () => {
   };
   const mockChartTypeBarChart = {
     label: 'Distribution - Bar Chart',
-    requiresTime: false,
     value: 'dist_bar',
   };
   const mockChartTypeTB = {
     label: 'Time Series - Bar Chart',
-    requiresTime: true,
     value: 'bar',
   };
   const getExploreResultsButtonWrapper = (props = mockedProps) =>
-    shallow(<ExploreResultsButton {...props} />, {
-      context: { store },
-    }).dive();
+    shallow(<ExploreResultsButton store={store} {...props} />)
+      .dive()
+      .dive();
 
   it('renders', () => {
     expect(React.isValidElement(<ExploreResultsButton />)).toBe(true);
@@ -96,12 +93,7 @@ describe('ExploreResultsButton', () => {
     });
 
     const badCols = wrapper.instance().getInvalidColumns();
-    expect(badCols).toEqual([
-      'COUNT(*)',
-      '1',
-      '123',
-      'CASE WHEN 1=1 THEN 1 ELSE 0 END',
-    ]);
+    expect(badCols).toEqual(['my_dupe_col__2', '__timestamp', '__TIMESTAMP']);
 
     const msgWrapper = shallow(wrapper.instance().renderInvalidColumnMessage());
     expect(msgWrapper.find('div')).toHaveLength(1);
@@ -109,7 +101,7 @@ describe('ExploreResultsButton', () => {
 
   it('renders a Button', () => {
     const wrapper = getExploreResultsButtonWrapper();
-    expect(wrapper.find(Button)).toHaveLength(1);
+    expect(wrapper.find(Button)).toExist();
   });
 
   describe('datasourceName', () => {
@@ -156,9 +148,11 @@ describe('ExploreResultsButton', () => {
       query: longQuery,
       database,
     };
-    const longQueryWrapper = shallow(<ExploreResultsButton {...props} />, {
-      context: { store },
-    }).dive();
+    const longQueryWrapper = shallow(
+      <ExploreResultsButton store={store} {...props} />,
+    )
+      .dive()
+      .dive();
     const inst = longQueryWrapper.instance();
     expect(inst.getQueryDuration()).toBe(100.7050400390625);
   });
@@ -190,73 +184,6 @@ describe('ExploreResultsButton', () => {
       exploreUtils.exportChart.restore();
       wrapper.instance().buildVizOptions.restore();
       fetchMock.reset();
-    });
-
-    it('should build request with correct args', done => {
-      wrapper.instance().visualize();
-
-      setTimeout(() => {
-        const calls = fetchMock.calls(visualizeEndpoint);
-        expect(calls).toHaveLength(1);
-        const formData = calls[0][1].body;
-
-        Object.keys(mockOptions).forEach(key => {
-          // eslint-disable-next-line no-unused-expressions
-          expect(formData.get(key)).toBeDefined();
-        });
-
-        done();
-      });
-    });
-
-    it('should export chart and add an info toast', done => {
-      const infoToastSpy = sinon.spy();
-      const datasourceSpy = sinon.stub();
-
-      datasourceSpy.callsFake(() => Promise.resolve(visualizationPayload));
-
-      wrapper.setProps({
-        actions: {
-          addInfoToast: infoToastSpy,
-          createDatasource: datasourceSpy,
-        },
-      });
-
-      wrapper.instance().visualize();
-
-      setTimeout(() => {
-        expect(datasourceSpy.callCount).toBe(1);
-        expect(exploreUtils.exploreChart.callCount).toBe(1);
-        expect(exploreUtils.exploreChart.getCall(0).args[0].datasource).toBe(
-          '107__table',
-        );
-        expect(infoToastSpy.callCount).toBe(1);
-        done();
-      });
-    });
-
-    it('should add error toast', done => {
-      const dangerToastSpy = sinon.stub(actions, 'addDangerToast');
-      const datasourceSpy = sinon.stub();
-
-      datasourceSpy.callsFake(() => Promise.reject({ error: 'error' }));
-
-      wrapper.setProps({
-        actions: {
-          createDatasource: datasourceSpy,
-          addDangerToast: dangerToastSpy,
-        },
-      });
-
-      wrapper.instance().visualize();
-
-      setTimeout(() => {
-        expect(datasourceSpy.callCount).toBe(1);
-        expect(exploreUtils.exportChart.callCount).toBe(0);
-        expect(dangerToastSpy.callCount).toBe(1);
-        dangerToastSpy.restore();
-        done();
-      });
     });
   });
 });

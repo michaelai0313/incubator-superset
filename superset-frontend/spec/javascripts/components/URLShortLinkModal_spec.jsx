@@ -28,18 +28,19 @@ describe('URLShortLinkModal', () => {
     url: 'mockURL',
     emailSubject: 'Mock Subject',
     emailContent: 'mock content',
+    triggerNode: <div />,
   };
 
   function setup() {
     const mockStore = configureStore([]);
     const store = mockStore({});
-    return shallow(<URLShortLinkModal {...defaultProps} />, {
-      context: { store },
-    }).dive();
+    return shallow(
+      <URLShortLinkModal store={store} {...defaultProps} />,
+    ).dive();
   }
 
   it('renders ModalTrigger', () => {
     const wrapper = setup();
-    expect(wrapper.find(ModalTrigger)).toHaveLength(1);
+    expect(wrapper.find(ModalTrigger)).toExist();
   });
 });

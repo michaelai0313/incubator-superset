@@ -14,8 +14,7 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
-# pylint: disable=C,R,W
-# pylint: disable=invalid-unary-operand-type
+# pylint: skip-file
 import json
 import logging
 import re
@@ -45,7 +44,9 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
 )
+from sqlalchemy.ext.hybrid import hybrid_property
 from sqlalchemy.orm import backref, relationship, Session
+from sqlalchemy.sql import expression
 from sqlalchemy_utils import EncryptedType
 
 from superset import conf, db, is_feature_enabled, security_manager
@@ -53,11 +54,12 @@ from superset.connectors.base.models import BaseColumn, BaseDatasource, BaseMetr
 from superset.constants import NULL_STRING
 from superset.exceptions import SupersetException
 from superset.models.core import Database
-from superset.models.helpers import AuditMixinNullable, ImportMixin, QueryResult
+from superset.models.helpers import AuditMixinNullable, ImportExportMixin, QueryResult
 from superset.typing import FilterValues, Granularity, Metric, QueryObjectDict
-from superset.utils import core as utils, import_datasource
+from superset.utils import core as utils
 
 try:
+    import requests
     from pydruid.client import PyDruid
     from pydruid.utils.aggregators import count
     from pydruid.utils.dimensions import (
@@ -76,17 +78,11 @@ try:
         Quantile,
         Quantiles,
     )
-    import requests
 except ImportError:
     pass
 
 try:
-    from superset.utils.core import (
-        DimSelector,
-        DTTM_ALIAS,
-        FilterOperator,
-        flasher,
-    )
+    from superset.utils.core import DimSelector, DTTM_ALIAS, FilterOperator, flasher
 except ImportError:
     pass
 
@@ -125,7 +121,7 @@ def _fetch_metadata_for(datasource: "DruidDatasource") -> Optional[Dict[str, Any
     return datasource.latest_metadata()
 
 
-class DruidCluster(Model, AuditMixinNullable, ImportMixin):
+class DruidCluster(Model, AuditMixinNullable, ImportExportMixin):
 
     """ORM object referencing the Druid clusters"""
 
@@ -210,11 +206,11 @@ class DruidCluster(Model, AuditMixinNullable, ImportMixin):
         If ``datasource_name`` is specified, only that datasource is updated
         """
         ds_list = self.get_datasources()
-        blacklist = conf.get("DRUID_DATA_SOURCE_BLACKLIST", [])
+        denylist = conf.get("DRUID_DATA_SOURCE_DENYLIST", [])
         ds_refresh: List[str] = []
         if not datasource_name:
-            ds_refresh = list(filter(lambda ds: ds not in blacklist, ds_list))
-        elif datasource_name not in blacklist and datasource_name in ds_list:
+            ds_refresh = list(filter(lambda ds: ds not in denylist, ds_list))
+        elif datasource_name not in denylist and datasource_name in ds_list:
             ds_refresh.append(datasource_name)
         else:
             return
@@ -286,12 +282,16 @@ class DruidCluster(Model, AuditMixinNullable, ImportMixin):
                 datasource.refresh_metrics()
         session.commit()
 
-    @property
+    @hybrid_property
     def perm(self) -> str:
-        return "[{obj.cluster_name}].(id:{obj.id})".format(obj=self)
+        return f"[{self.cluster_name}].(id:{self.id})"
+
+    @perm.expression  # type: ignore
+    def perm(cls) -> str:  # pylint: disable=no-self-argument
+        return "[" + cls.cluster_name + "].(id:" + expression.cast(cls.id, String) + ")"
 
     def get_perm(self) -> str:
-        return self.perm
+        return self.perm  # type: ignore
 
     @property
     def name(self) -> str:
@@ -378,20 +378,6 @@ class DruidColumn(Model, BaseColumn):
                     metric.datasource_id = self.datasource_id
                     db.session.add(metric)
 
-    @classmethod
-    def import_obj(cls, i_column: "DruidColumn") -> "DruidColumn":
-        def lookup_obj(lookup_column: DruidColumn) -> Optional[DruidColumn]:
-            return (
-                db.session.query(DruidColumn)
-                .filter(
-                    DruidColumn.datasource_id == lookup_column.datasource_id,
-                    DruidColumn.column_name == lookup_column.column_name,
-                )
-                .first()
-            )
-
-        return import_datasource.import_simple_obj(db.session, i_column, lookup_obj)
-
 
 class DruidMetric(Model, BaseMetric):
 
@@ -447,20 +433,6 @@ class DruidMetric(Model, BaseMetric):
     def get_perm(self) -> Optional[str]:
         return self.perm
 
-    @classmethod
-    def import_obj(cls, i_metric: "DruidMetric") -> "DruidMetric":
-        def lookup_obj(lookup_metric: DruidMetric) -> Optional[DruidMetric]:
-            return (
-                db.session.query(DruidMetric)
-                .filter(
-                    DruidMetric.datasource_id == lookup_metric.datasource_id,
-                    DruidMetric.metric_name == lookup_metric.metric_name,
-                )
-                .first()
-            )
-
-        return import_datasource.import_simple_obj(db.session, i_metric, lookup_obj)
-
 
 druiddatasource_user = Table(
     "druiddatasource_user",
@@ -481,6 +453,8 @@ class DruidDatasource(Model, BaseDatasource):
     type = "druid"
     query_language = "json"
     cluster_class = DruidCluster
+    columns: List[DruidColumn] = []
+    metrics: List[DruidMetric] = []
     metric_class = DruidMetric
     column_class = DruidColumn
     owner_class = security_manager.user_model
@@ -539,6 +513,10 @@ class DruidDatasource(Model, BaseDatasource):
     @property
     def name(self) -> str:
         return self.datasource_name
+
+    @property
+    def datasource_type(self) -> str:
+        return self.type
 
     @property
     def schema(self) -> Optional[str]:
@@ -605,34 +583,6 @@ class DruidDatasource(Model, BaseDatasource):
 
     def get_metric_obj(self, metric_name: str) -> Dict[str, Any]:
         return [m.json_obj for m in self.metrics if m.metric_name == metric_name][0]
-
-    @classmethod
-    def import_obj(
-        cls, i_datasource: "DruidDatasource", import_time: Optional[int] = None
-    ) -> int:
-        """Imports the datasource from the object to the database.
-
-         Metrics and columns and datasource will be overridden if exists.
-         This function can be used to import/export dashboards between multiple
-         superset instances. Audit metadata isn't copies over.
-        """
-
-        def lookup_datasource(d: DruidDatasource) -> Optional[DruidDatasource]:
-            return (
-                db.session.query(DruidDatasource)
-                .filter(
-                    DruidDatasource.datasource_name == d.datasource_name,
-                    DruidDatasource.cluster_id == d.cluster_id,
-                )
-                .first()
-            )
-
-        def lookup_cluster(d: DruidDatasource) -> Optional[DruidCluster]:
-            return db.session.query(DruidCluster).filter_by(id=d.cluster_id).first()
-
-        return import_datasource.import_datasource(
-            db.session, i_datasource, lookup_cluster, lookup_datasource, import_time
-        )
 
     def latest_metadata(self) -> Optional[Dict[str, Any]]:
         """Returns segment metadata from the latest segment"""
@@ -845,7 +795,8 @@ class DruidDatasource(Model, BaseDatasource):
         else:
             granularity["type"] = "duration"
             granularity["duration"] = (
-                utils.parse_human_timedelta(period_name).total_seconds() * 1000  # type: ignore
+                utils.parse_human_timedelta(period_name).total_seconds()  # type: ignore
+                * 1000
             )
         return granularity
 
@@ -950,7 +901,7 @@ class DruidDatasource(Model, BaseDatasource):
 
     @staticmethod
     def metrics_and_post_aggs(
-        metrics: List[Metric], metrics_dict: Dict[str, DruidMetric],
+        metrics: List[Metric], metrics_dict: Dict[str, DruidMetric]
     ) -> Tuple["OrderedDict[str, Any]", "OrderedDict[str, Any]"]:
         # Separate metrics into those that are aggregations
         # and those that are post aggregations
@@ -1077,12 +1028,12 @@ class DruidDatasource(Model, BaseDatasource):
         adhoc_metrics: Optional[List[Dict[str, Any]]] = None,
     ) -> "OrderedDict[str, Any]":
         """
-            Returns a dictionary of aggregation metric names to aggregation json objects
+        Returns a dictionary of aggregation metric names to aggregation json objects
 
-            :param metrics_dict: dictionary of all the metrics
-            :param saved_metrics: list of saved metric names
-            :param adhoc_metrics: list of adhoc metric names
-            :raise SupersetException: if one or more metric names are not aggregations
+        :param metrics_dict: dictionary of all the metrics
+        :param saved_metrics: list of saved metric names
+        :param adhoc_metrics: list of adhoc metric names
+        :raise SupersetException: if one or more metric names are not aggregations
         """
         if not adhoc_metrics:
             adhoc_metrics = []
@@ -1179,6 +1130,7 @@ class DruidDatasource(Model, BaseDatasource):
         timeseries_limit: Optional[int] = None,
         timeseries_limit_metric: Optional[Metric] = None,
         row_limit: Optional[int] = None,
+        row_offset: Optional[int] = None,
         inner_from_dttm: Optional[datetime] = None,
         inner_to_dttm: Optional[datetime] = None,
         orderby: Optional[Any] = None,
@@ -1187,11 +1139,12 @@ class DruidDatasource(Model, BaseDatasource):
         client: Optional["PyDruid"] = None,
         order_desc: bool = True,
     ) -> str:
-        """Runs a query against Druid and returns a dataframe.
-        """
+        """Runs a query against Druid and returns a dataframe."""
         # TODO refactor into using a TBD Query object
         client = client or self.cluster.get_pydruid_client()
         row_limit = row_limit or conf.get("ROW_LIMIT")
+        if row_offset:
+            raise SupersetException("Offset not implemented for Druid connector")
 
         if not is_timeseries:
             granularity = "all"
@@ -1392,7 +1345,7 @@ class DruidDatasource(Model, BaseDatasource):
                 if df is None:
                     df = pd.DataFrame()
                 qry["filter"] = self._add_filter_from_pre_query_data(
-                    df, pre_qry["dimensions"], qry["filter"]
+                    df, pre_qry["dimensions"], filters
                 )
                 qry["limit_spec"] = None
             if row_limit:

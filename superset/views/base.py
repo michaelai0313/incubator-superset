@@ -14,13 +14,13 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
+import dataclasses  # pylint: disable=wrong-import-order
 import functools
 import logging
 import traceback
 from datetime import datetime
 from typing import Any, Callable, cast, Dict, List, Optional, TYPE_CHECKING, Union
 
-import dataclasses
 import simplejson as json
 import yaml
 from flask import abort, flash, g, get_flashed_messages, redirect, Response, session
@@ -48,8 +48,12 @@ from superset import (
 )
 from superset.connectors.sqla import models
 from superset.errors import ErrorLevel, SupersetError, SupersetErrorType
-from superset.exceptions import SupersetException, SupersetSecurityException
-from superset.models.helpers import ImportMixin
+from superset.exceptions import (
+    SupersetErrorException,
+    SupersetException,
+    SupersetSecurityException,
+)
+from superset.models.helpers import ImportExportMixin
 from superset.translations.utils import get_language_pack
 from superset.typing import FlaskResponse
 from superset.utils import core as utils
@@ -66,12 +70,15 @@ FRONTEND_CONF_KEYS = (
     "SUPERSET_DASHBOARD_POSITION_DATA_LIMIT",
     "SUPERSET_DASHBOARD_PERIODICAL_REFRESH_LIMIT",
     "SUPERSET_DASHBOARD_PERIODICAL_REFRESH_WARNING_MESSAGE",
+    "DISABLE_DATASET_SOURCE_EDIT",
     "ENABLE_JAVASCRIPT_CONTROLS",
     "DEFAULT_SQLLAB_LIMIT",
     "SQL_MAX_ROW",
     "SUPERSET_WEBSERVER_DOMAINS",
     "SQLLAB_SAVE_WARNING_MESSAGE",
     "DISPLAY_MAX_ROW",
+    "GLOBAL_ASYNC_QUERIES_TRANSPORT",
+    "GLOBAL_ASYNC_QUERIES_POLLING_DELAY",
 )
 logger = logging.getLogger(__name__)
 
@@ -176,6 +183,9 @@ def handle_api_exception(
             return json_errors_response(
                 errors=[ex.error], status=ex.status, payload=ex.payload
             )
+        except SupersetErrorException as ex:
+            logger.warning(ex)
+            return json_errors_response(errors=[ex.error], status=ex.status)
         except SupersetException as ex:
             logger.exception(ex)
             return json_error_response(
@@ -212,7 +222,7 @@ def validate_sqlatable(table: models.SqlaTable) -> None:
     try:
         table.get_sqla_table_object()
     except Exception as ex:
-        logger.exception(f"Got an error in pre_add for {table.name}")
+        logger.exception("Got an error in pre_add for %s", table.name)
         raise Exception(
             _(
                 "Table [%{table}s] could not be found, "
@@ -247,25 +257,22 @@ class BaseSupersetView(BaseView):
             mimetype="application/json",
         )
 
+    def render_app_template(self) -> FlaskResponse:
+        payload = {
+            "user": bootstrap_user_data(g.user),
+            "common": common_bootstrap_payload(),
+        }
+        return self.render_template(
+            "superset/crud_views.html",
+            entry="crudViews",
+            bootstrap_data=json.dumps(
+                payload, default=utils.pessimistic_json_iso_dttm_ser
+            ),
+        )
+
 
 def menu_data() -> Dict[str, Any]:
     menu = appbuilder.menu.get_data()
-    root_path = "#"
-    logo_target_path = ""
-    if not g.user.is_anonymous:
-        try:
-            logo_target_path = (
-                appbuilder.app.config["LOGO_TARGET_PATH"]
-                or f"/profile/{g.user.username}/"
-            )
-        # when user object has no username
-        except NameError as ex:
-            logger.exception(ex)
-
-        if logo_target_path.startswith("/"):
-            root_path = f"/superset{logo_target_path}"
-        else:
-            root_path = logo_target_path
 
     languages = {}
     for lang in appbuilder.languages:
@@ -276,7 +283,7 @@ def menu_data() -> Dict[str, Any]:
     return {
         "menu": menu,
         "brand": {
-            "path": root_path,
+            "path": appbuilder.app.config["LOGO_TARGET_PATH"] or "/",
             "icon": appbuilder.app_icon,
             "alt": appbuilder.app_name,
             "width": appbuilder.app.config["APP_ICON_WIDTH"],
@@ -292,6 +299,9 @@ def menu_data() -> Dict[str, Any]:
             "user_info_url": appbuilder.get_url_for_userinfo,
             "user_logout_url": appbuilder.get_url_for_logout,
             "user_login_url": appbuilder.get_url_for_login,
+            "user_profile_url": None
+            if g.user.is_anonymous
+            else f"/superset/profile/{g.user.username}",
             "locale": session.get("locale", "en"),
         },
     }
@@ -312,6 +322,17 @@ def common_bootstrap_payload() -> Dict[str, Any]:
     }
 
 
+@superset_app.context_processor
+def get_common_bootstrap_data() -> Dict[str, Any]:
+    def serialize_bootstrap_data() -> str:
+        return json.dumps(
+            {"common": common_bootstrap_payload()},
+            default=utils.pessimistic_json_iso_dttm_ser,
+        )
+
+    return {"bootstrap_data": serialize_bootstrap_data}
+
+
 class SupersetListWidget(ListWidget):  # pylint: disable=too-few-public-methods
     template = "superset/fab_overrides/list.html"
 
@@ -326,8 +347,8 @@ class SupersetModelView(ModelView):
             "common": common_bootstrap_payload(),
         }
         return self.render_template(
-            "superset/welcome.html",
-            entry="welcome",
+            "superset/crud_views.html",
+            entry="crudViews",
             bootstrap_data=json.dumps(
                 payload, default=utils.pessimistic_json_iso_dttm_ser
             ),
@@ -360,7 +381,7 @@ class YamlExportMixin:  # pylint: disable=too-few-public-methods
 
     @action("yaml_export", __("Export to YAML"), __("Export to YAML?"), "fa-download")
     def yaml_export(
-        self, items: Union[ImportMixin, List[ImportMixin]]
+        self, items: Union[ImportExportMixin, List[ImportExportMixin]]
     ) -> FlaskResponse:
         if not isinstance(items, list):
             items = [items]
@@ -375,13 +396,13 @@ class YamlExportMixin:  # pylint: disable=too-few-public-methods
 
 
 class DeleteMixin:  # pylint: disable=too-few-public-methods
-    def _delete(self: BaseView, primary_key: int,) -> None:
+    def _delete(self: BaseView, primary_key: int) -> None:
         """
-            Delete function logic, override to implement diferent logic
-            deletes the record with primary_key = primary_key
+        Delete function logic, override to implement diferent logic
+        deletes the record with primary_key = primary_key
 
-            :param primary_key:
-                record primary key to delete
+        :param primary_key:
+            record primary key to delete
         """
         item = self.datamodel.get(primary_key, self._base_filters)
         if not item:
@@ -433,7 +454,7 @@ class DeleteMixin:  # pylint: disable=too-few-public-methods
 
 class DatasourceFilter(BaseFilter):  # pylint: disable=too-few-public-methods
     def apply(self, query: Query, value: Any) -> Query:
-        if security_manager.all_datasource_access():
+        if security_manager.can_access_all_datasources():
             return query
         datasource_perms = security_manager.user_view_menu_names("datasource_access")
         schema_perms = security_manager.user_view_menu_names("schema_access")
@@ -498,8 +519,7 @@ def check_ownership(obj: Any, raise_if_false: bool = True) -> bool:
         return True
     if raise_if_false:
         raise security_exception
-    else:
-        return False
+    return False
 
 
 def bind_field(
@@ -520,3 +540,18 @@ def bind_field(
 
 
 FlaskForm.Meta.bind_field = bind_field
+
+
+@superset_app.after_request
+def apply_http_headers(response: Response) -> Response:
+    """Applies the configuration's http headers to all responses"""
+
+    # HTTP_HEADERS is deprecated, this provides backwards compatibility
+    response.headers.extend(  # type: ignore
+        {**config["OVERRIDE_HTTP_HEADERS"], **config["HTTP_HEADERS"]}
+    )
+
+    for k, v in config["DEFAULT_HTTP_HEADERS"].items():
+        if k not in response.headers:
+            response.headers[k] = v
+    return response

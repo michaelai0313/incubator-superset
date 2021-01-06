@@ -18,8 +18,10 @@
  */
 import React from 'react';
 import PropTypes from 'prop-types';
-import { Button, Popover, Tab, Tabs } from 'react-bootstrap';
+import Button from 'src/components/Button';
+import { styled, t } from '@superset-ui/core';
 
+import Tabs from 'src/common/components/Tabs';
 import columnType from '../propTypes/columnType';
 import adhocMetricType from '../propTypes/adhocMetricType';
 import AdhocFilter, { EXPRESSION_TYPES } from '../AdhocFilter';
@@ -40,10 +42,15 @@ const propTypes = {
   ).isRequired,
   datasource: PropTypes.object,
   partitionColumn: PropTypes.string,
+  theme: PropTypes.object,
 };
 
-const startingWidth = 300;
-const startingHeight = 190;
+const ResizeIcon = styled.i`
+  margin-left: ${({ theme }) => theme.gridUnit * 2}px;
+`;
+
+const startingWidth = 320;
+const startingHeight = 240;
 
 export default class AdhocFilterEditPopover extends React.Component {
   constructor(props) {
@@ -60,6 +67,8 @@ export default class AdhocFilterEditPopover extends React.Component {
       width: startingWidth,
       height: startingHeight,
     };
+
+    this.popoverContentRef = React.createRef();
   }
 
   componentDidMount() {
@@ -119,6 +128,7 @@ export default class AdhocFilterEditPopover extends React.Component {
       onResize,
       datasource,
       partitionColumn,
+      theme,
       ...popoverProps
     } = this.props;
 
@@ -128,17 +138,24 @@ export default class AdhocFilterEditPopover extends React.Component {
     const hasUnsavedChanges = !adhocFilter.equals(propsAdhocFilter);
 
     return (
-      <Popover id="filter-edit-popover" {...popoverProps}>
+      <div
+        id="filter-edit-popover"
+        {...popoverProps}
+        data-test="filter-edit-popover"
+        ref={this.popoverContentRef}
+      >
         <Tabs
           id="adhoc-filter-edit-tabs"
           defaultActiveKey={adhocFilter.expressionType}
           className="adhoc-filter-edit-tabs"
+          data-test="adhoc-filter-edit-tabs"
           style={{ height: this.state.height, width: this.state.width }}
+          allowOverflow
         >
-          <Tab
+          <Tabs.TabPane
             className="adhoc-filter-edit-tab"
-            eventKey={EXPRESSION_TYPES.SIMPLE}
-            title="Simple"
+            key={EXPRESSION_TYPES.SIMPLE}
+            tab={t('Simple')}
           >
             <AdhocFilterEditPopoverSimpleTabContent
               adhocFilter={this.state.adhocFilter}
@@ -147,12 +164,13 @@ export default class AdhocFilterEditPopover extends React.Component {
               datasource={datasource}
               onHeightChange={this.adjustHeight}
               partitionColumn={partitionColumn}
+              popoverRef={this.popoverContentRef.current}
             />
-          </Tab>
-          <Tab
+          </Tabs.TabPane>
+          <Tabs.TabPane
             className="adhoc-filter-edit-tab"
-            eventKey={EXPRESSION_TYPES.SQL}
-            title="Custom SQL"
+            key={EXPRESSION_TYPES.SQL}
+            tab={t('Custom SQL')}
           >
             {!this.props.datasource ||
             this.props.datasource.type !== 'druid' ? (
@@ -167,28 +185,36 @@ export default class AdhocFilterEditPopover extends React.Component {
                 Custom SQL Filters are not available on druid datasources
               </div>
             )}
-          </Tab>
+          </Tabs.TabPane>
         </Tabs>
         <div>
+          <Button buttonSize="small" onClick={this.props.onClose} cta>
+            {t('Close')}
+          </Button>
           <Button
+            data-test="adhoc-filter-edit-popover-save-button"
             disabled={!stateIsValid}
-            bsStyle={hasUnsavedChanges && stateIsValid ? 'primary' : 'default'}
-            bsSize="small"
+            buttonStyle={
+              hasUnsavedChanges && stateIsValid ? 'primary' : 'default'
+            }
+            buttonSize="small"
             className="m-r-5"
             onClick={this.onSave}
+            cta
           >
-            Save
+            {t('Save')}
           </Button>
-          <Button bsSize="small" onClick={this.props.onClose}>
-            Close
-          </Button>
-          <i
+          <ResizeIcon
+            role="button"
+            aria-label="Resize"
+            tabIndex={0}
             onMouseDown={this.onDragDown}
-            className="glyphicon glyphicon-resize-full edit-popover-resize"
+            className="fa fa-expand edit-popover-resize text-muted"
           />
         </div>
-      </Popover>
+      </div>
     );
   }
 }
+
 AdhocFilterEditPopover.propTypes = propTypes;

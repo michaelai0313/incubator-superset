@@ -18,15 +18,13 @@
  */
 /* eslint no-undef: 'error' */
 /* eslint no-param-reassign: ["error", { "props": false }] */
-import URI from 'urijs';
 import moment from 'moment';
-import { t } from '@superset-ui/translation';
-import { SupersetClient } from '@superset-ui/connection';
+import { t, SupersetClient } from '@superset-ui/core';
+import { getControlsState } from 'src/explore/store';
 import { isFeatureEnabled, FeatureFlag } from '../featureFlags';
 import {
   getAnnotationJsonUrl,
   getExploreUrl,
-  getHostName,
   getLegacyEndpointType,
   buildV1ChartDataPayload,
   postForm,
@@ -41,8 +39,8 @@ import {
 import { addDangerToast } from '../messageToasts/actions';
 import { logEvent } from '../logger/actions';
 import { Logger, LOG_ACTIONS_LOAD_CHART } from '../logger/LogUtils';
-import getClientErrorObject from '../utils/getClientErrorObject';
-import { allowCrossDomain as allowDomainSharding } from '../utils/hostNamesConfig';
+import { getClientErrorObject } from '../utils/getClientErrorObject';
+import { allowCrossDomain as domainShardingEnabled } from '../utils/hostNamesConfig';
 
 export const CHART_UPDATE_STARTED = 'CHART_UPDATE_STARTED';
 export function chartUpdateStarted(queryController, latestQueryFormData, key) {
@@ -55,8 +53,8 @@ export function chartUpdateStarted(queryController, latestQueryFormData, key) {
 }
 
 export const CHART_UPDATE_SUCCEEDED = 'CHART_UPDATE_SUCCEEDED';
-export function chartUpdateSucceeded(queryResponse, key) {
-  return { type: CHART_UPDATE_SUCCEEDED, queryResponse, key };
+export function chartUpdateSucceeded(queriesResponse, key) {
+  return { type: CHART_UPDATE_SUCCEEDED, queriesResponse, key };
 }
 
 export const CHART_UPDATE_STOPPED = 'CHART_UPDATE_STOPPED';
@@ -64,14 +62,14 @@ export function chartUpdateStopped(key) {
   return { type: CHART_UPDATE_STOPPED, key };
 }
 
-export const CHART_UPDATE_TIMEOUT = 'CHART_UPDATE_TIMEOUT';
-export function chartUpdateTimeout(statusText, timeout, key) {
-  return { type: CHART_UPDATE_TIMEOUT, statusText, timeout, key };
+export const CHART_UPDATE_FAILED = 'CHART_UPDATE_FAILED';
+export function chartUpdateFailed(queriesResponse, key) {
+  return { type: CHART_UPDATE_FAILED, queriesResponse, key };
 }
 
-export const CHART_UPDATE_FAILED = 'CHART_UPDATE_FAILED';
-export function chartUpdateFailed(queryResponse, key) {
-  return { type: CHART_UPDATE_FAILED, queryResponse, key };
+export const CHART_UPDATE_QUEUED = 'CHART_UPDATE_QUEUED';
+export function chartUpdateQueued(asyncJobMeta, key) {
+  return { type: CHART_UPDATE_QUEUED, asyncJobMeta, key };
 }
 
 export const CHART_RENDERING_FAILED = 'CHART_RENDERING_FAILED';
@@ -104,6 +102,20 @@ export function annotationQueryFailed(annotation, queryResponse, key) {
   return { type: ANNOTATION_QUERY_FAILED, annotation, queryResponse, key };
 }
 
+export const DYNAMIC_PLUGIN_CONTROLS_READY = 'DYNAMIC_PLUGIN_CONTROLS_READY';
+export const dynamicPluginControlsReady = () => (dispatch, getState) => {
+  const state = getState();
+  const controlsState = getControlsState(
+    state.explore,
+    state.explore.form_data,
+  );
+  dispatch({
+    type: DYNAMIC_PLUGIN_CONTROLS_READY,
+    key: controlsState.slice_id.value,
+    controlsState,
+  });
+};
+
 const legacyChartDataRequest = async (
   formData,
   resultFormat,
@@ -113,6 +125,9 @@ const legacyChartDataRequest = async (
   requestParams = {},
 ) => {
   const endpointType = getLegacyEndpointType({ resultFormat, resultType });
+  const allowDomainSharding =
+    // eslint-disable-next-line camelcase
+    domainShardingEnabled && requestParams?.dashboard_id;
   const url = getExploreUrl({
     formData,
     endpointType,
@@ -149,15 +164,25 @@ const v1ChartDataRequest = async (
   force,
   requestParams,
 ) => {
-  const payload = buildV1ChartDataPayload({ formData, force });
-  // TODO: remove once these are added to superset-ui/query
-  payload.result_type = resultType;
-  payload.result_format = resultFormat;
+  const payload = buildV1ChartDataPayload({
+    formData,
+    resultType,
+    resultFormat,
+    force,
+  });
 
   // The dashboard id is added to query params for tracking purposes
-  const qs = requestParams.dashboard_id
-    ? { dashboard_id: requestParams.dashboard_id }
-    : {};
+  const { slice_id: sliceId } = formData;
+  const { dashboard_id: dashboardId } = requestParams;
+
+  const qs = {};
+  if (sliceId !== undefined) qs.form_data = `{"slice_id":${sliceId}}`;
+  if (dashboardId !== undefined) qs.dashboard_id = dashboardId;
+  if (force !== false) qs.force = force;
+
+  const allowDomainSharding =
+    // eslint-disable-next-line camelcase
+    domainShardingEnabled && requestParams?.dashboard_id;
   const url = getChartDataUri({
     path: '/api/v1/chart/data',
     qs,
@@ -187,7 +212,7 @@ export async function getChartDataRequest({
     ...requestParams,
   };
 
-  if (allowDomainSharding) {
+  if (domainShardingEnabled) {
     querySettings = {
       ...querySettings,
       mode: 'cors',
@@ -219,6 +244,7 @@ export function runAnnotationQuery(
   timeout = 60,
   formData = null,
   key,
+  isDashboardRequest = false,
 ) {
   return function (dispatch, getState) {
     const sliceKey = key || Object.keys(getState().charts)[0];
@@ -249,7 +275,7 @@ export function runAnnotationQuery(
       {},
     );
 
-    if (fd !== null) {
+    if (!isDashboardRequest && fd) {
       const hasExtraFilters = fd.extra_filters && fd.extra_filters.length > 0;
       sliceFormData.extra_filters = hasExtraFilters
         ? fd.extra_filters
@@ -350,30 +376,35 @@ export function exploreJSON(
 
     const chartDataRequestCaught = chartDataRequest
       .then(response => {
-        // new API returns an object with an array of restults
-        // problem: response holds a list of results, when before we were just getting one result.
-        // How to make the entire app compatible with multiple results?
-        // For now just use the first result.
-        const result = response.result[0];
-        dispatch(
-          logEvent(LOG_ACTIONS_LOAD_CHART, {
-            slice_id: key,
-            is_cached: result.is_cached,
-            force_refresh: force,
-            row_count: result.rowcount,
-            datasource: formData.datasource,
-            start_offset: logStart,
-            ts: new Date().getTime(),
-            duration: Logger.getTimestamp() - logStart,
-            has_extra_filters:
-              formData.extra_filters && formData.extra_filters.length > 0,
-            viz_type: formData.viz_type,
-            data_age: result.is_cached
-              ? moment(new Date()).diff(moment.utc(result.cached_dttm))
-              : null,
-          }),
+        const queriesResponse = response.result;
+        if (isFeatureEnabled(FeatureFlag.GLOBAL_ASYNC_QUERIES)) {
+          // deal with getChartDataRequest transforming the response data
+          const result = 'result' in response ? response.result[0] : response;
+          return dispatch(chartUpdateQueued(result, key));
+        }
+
+        queriesResponse.forEach(resultItem =>
+          dispatch(
+            logEvent(LOG_ACTIONS_LOAD_CHART, {
+              slice_id: key,
+              applied_filters: resultItem.applied_filters,
+              is_cached: resultItem.is_cached,
+              force_refresh: force,
+              row_count: resultItem.rowcount,
+              datasource: formData.datasource,
+              start_offset: logStart,
+              ts: new Date().getTime(),
+              duration: Logger.getTimestamp() - logStart,
+              has_extra_filters:
+                formData.extra_filters && formData.extra_filters.length > 0,
+              viz_type: formData.viz_type,
+              data_age: resultItem.is_cached
+                ? moment(new Date()).diff(moment.utc(resultItem.cached_dttm))
+                : null,
+            }),
+          ),
         );
-        return dispatch(chartUpdateSucceeded(result, key));
+        return dispatch(chartUpdateSucceeded(queriesResponse, key));
       })
       .catch(response => {
         const appendErrorLog = (errorDetails, isCached) => {
@@ -390,31 +421,34 @@ export function exploreJSON(
             }),
           );
         };
-
-        if (response.statusText === 'timeout') {
-          appendErrorLog('timeout');
-          return dispatch(
-            chartUpdateTimeout(response.statusText, timeout, key),
-          );
-        } else if (response.name === 'AbortError') {
+        if (response.name === 'AbortError') {
           appendErrorLog('abort');
           return dispatch(chartUpdateStopped(key));
         }
         return getClientErrorObject(response).then(parsedResponse => {
-          // query is processed, but error out.
-          appendErrorLog(parsedResponse.error, parsedResponse.is_cached);
-          return dispatch(chartUpdateFailed(parsedResponse, key));
+          if (response.statusText === 'timeout') {
+            appendErrorLog('timeout');
+          } else {
+            appendErrorLog(parsedResponse.error, parsedResponse.is_cached);
+          }
+          return dispatch(chartUpdateFailed([parsedResponse], key));
         });
       });
 
-    const annotationLayers = formData.annotation_layers || [];
+    // only retrieve annotations when calling the legacy API
+    const annotationLayers = shouldUseLegacyApi(formData)
+      ? formData.annotation_layers || []
+      : [];
+    const isDashboardRequest = dashboardId > 0;
 
     return Promise.all([
       chartDataRequestCaught,
       dispatch(triggerQuery(false, key)),
       dispatch(updateQueryFormData(formData, key)),
       ...annotationLayers.map(x =>
-        dispatch(runAnnotationQuery(x, timeout, formData, key)),
+        dispatch(
+          runAnnotationQuery(x, timeout, formData, key, isDashboardRequest),
+        ),
       ),
     ]);
   };

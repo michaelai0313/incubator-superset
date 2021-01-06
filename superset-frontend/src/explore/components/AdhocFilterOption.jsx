@@ -18,18 +18,17 @@
  */
 import React from 'react';
 import PropTypes from 'prop-types';
-import { Label, OverlayTrigger } from 'react-bootstrap';
-import { t } from '@superset-ui/translation';
-import { InfoTooltipWithTrigger } from '@superset-ui/control-utils';
-
-import AdhocFilterEditPopover from './AdhocFilterEditPopover';
 import AdhocFilter from '../AdhocFilter';
 import columnType from '../propTypes/columnType';
 import adhocMetricType from '../propTypes/adhocMetricType';
+import AdhocFilterPopoverTrigger from './AdhocFilterPopoverTrigger';
+import { DraggableOptionControlLabel } from './OptionControls';
+import { OPTION_TYPES } from './optionTypes';
 
 const propTypes = {
   adhocFilter: PropTypes.instanceOf(AdhocFilter).isRequired,
   onFilterEdit: PropTypes.func.isRequired,
+  onRemoveFilter: PropTypes.func,
   options: PropTypes.arrayOf(
     PropTypes.oneOfType([
       columnType,
@@ -39,85 +38,41 @@ const propTypes = {
   ).isRequired,
   datasource: PropTypes.object,
   partitionColumn: PropTypes.string,
+  onMoveLabel: PropTypes.func,
+  onDropLabel: PropTypes.func,
+  index: PropTypes.number,
 };
 
-export default class AdhocFilterOption extends React.PureComponent {
-  constructor(props) {
-    super(props);
-    this.closeFilterEditOverlay = this.closeFilterEditOverlay.bind(this);
-    this.onPopoverResize = this.onPopoverResize.bind(this);
-    this.onOverlayEntered = this.onOverlayEntered.bind(this);
-    this.onOverlayExited = this.onOverlayExited.bind(this);
-    this.state = { overlayShown: false };
-  }
+const AdhocFilterOption = ({
+  adhocFilter,
+  options,
+  datasource,
+  onFilterEdit,
+  onRemoveFilter,
+  partitionColumn,
+  onMoveLabel,
+  onDropLabel,
+  index,
+}) => (
+  <AdhocFilterPopoverTrigger
+    adhocFilter={adhocFilter}
+    options={options}
+    datasource={datasource}
+    onFilterEdit={onFilterEdit}
+    partitionColumn={partitionColumn}
+  >
+    <DraggableOptionControlLabel
+      label={adhocFilter.getDefaultLabel()}
+      onRemove={onRemoveFilter}
+      onMoveLabel={onMoveLabel}
+      onDropLabel={onDropLabel}
+      index={index}
+      type={OPTION_TYPES.filter}
+      isAdhoc
+    />
+  </AdhocFilterPopoverTrigger>
+);
 
-  onPopoverResize() {
-    this.forceUpdate();
-  }
+export default AdhocFilterOption;
 
-  onOverlayEntered() {
-    // isNew is used to indicate whether to automatically open the overlay
-    // once the overlay has been opened, the metric/filter will never be
-    // considered new again.
-    this.props.adhocFilter.isNew = false;
-    this.setState({ overlayShown: true });
-  }
-
-  onOverlayExited() {
-    this.setState({ overlayShown: false });
-  }
-
-  closeFilterEditOverlay() {
-    this.refs.overlay.hide();
-  }
-
-  render() {
-    const { adhocFilter } = this.props;
-    const overlay = (
-      <AdhocFilterEditPopover
-        onResize={this.onPopoverResize}
-        adhocFilter={adhocFilter}
-        onChange={this.props.onFilterEdit}
-        onClose={this.closeFilterEditOverlay}
-        options={this.props.options}
-        datasource={this.props.datasource}
-        partitionColumn={this.props.partitionColumn}
-      />
-    );
-    return (
-      <div onMouseDownCapture={e => e.stopPropagation()}>
-        {adhocFilter.isExtra && (
-          <InfoTooltipWithTrigger
-            icon="exclamation-triangle"
-            placement="top"
-            className="m-r-5 text-muted"
-            tooltip={t(`
-                This filter was inherited from the dashboard's context.
-                It won't be saved when saving the chart.
-              `)}
-          />
-        )}
-        <OverlayTrigger
-          ref="overlay"
-          placement="right"
-          trigger="click"
-          disabled
-          overlay={overlay}
-          rootClose
-          shouldUpdatePosition
-          defaultOverlayShown={adhocFilter.isNew}
-          onEntered={this.onOverlayEntered}
-          onExited={this.onOverlayExited}
-        >
-          <Label className="option-label adhoc-option adhoc-filter-option">
-            {adhocFilter.getDefaultLabel()}
-            <i
-              className={`glyphicon glyphicon-triangle-right adhoc-label-arrow`}
-            />
-          </Label>
-        </OverlayTrigger>
-      </div>
-    );
-  }
-}
 AdhocFilterOption.propTypes = propTypes;

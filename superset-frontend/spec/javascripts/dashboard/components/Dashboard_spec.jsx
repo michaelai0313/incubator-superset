@@ -26,12 +26,12 @@ import { CHART_TYPE } from 'src/dashboard/util/componentTypes';
 import newComponentFactory from 'src/dashboard/util/newComponentFactory';
 
 // mock data
-import chartQueries from '../fixtures/mockChartQueries';
-import datasources from '../../../fixtures/mockDatasource';
-import dashboardInfo from '../fixtures/mockDashboardInfo';
-import { dashboardLayout } from '../fixtures/mockDashboardLayout';
-import dashboardState from '../fixtures/mockDashboardState';
-import { sliceEntitiesForChart as sliceEntities } from '../fixtures/mockSliceEntities';
+import chartQueries from 'spec/fixtures/mockChartQueries';
+import datasources from 'spec/fixtures/mockDatasource';
+import dashboardInfo from 'spec/fixtures/mockDashboardInfo';
+import { dashboardLayout } from 'spec/fixtures/mockDashboardLayout';
+import dashboardState from 'spec/fixtures/mockDashboardState';
+import { sliceEntitiesForChart as sliceEntities } from 'spec/fixtures/mockSliceEntities';
 
 describe('Dashboard', () => {
   const props = {
@@ -70,10 +70,10 @@ describe('Dashboard', () => {
 
   it('should render a DashboardBuilder', () => {
     const wrapper = setup();
-    expect(wrapper.find(DashboardBuilder)).toHaveLength(1);
+    expect(wrapper.find(DashboardBuilder)).toExist();
   });
 
-  describe('componentWillReceiveProps', () => {
+  describe('UNSAFE_componentWillReceiveProps', () => {
     const layoutWithExtraChart = {
       ...props.layout,
       1001: newComponentFactory(CHART_TYPE, { chartId: 1001 }),

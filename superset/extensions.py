@@ -16,53 +16,21 @@
 # under the License.
 import json
 import os
-import random
-import time
-import uuid
-from datetime import datetime, timedelta
-from typing import Any, Callable, Dict, List, Optional, Type, TYPE_CHECKING
+from typing import Any, Callable, Dict, List, Optional
 
 import celery
 from cachelib.base import BaseCache
-from dateutil.relativedelta import relativedelta
 from flask import Flask
 from flask_appbuilder import AppBuilder, SQLA
 from flask_migrate import Migrate
 from flask_talisman import Talisman
+from flask_wtf.csrf import CSRFProtect
 from werkzeug.local import LocalProxy
 
+from superset.utils.async_query_manager import AsyncQueryManager
 from superset.utils.cache_manager import CacheManager
 from superset.utils.feature_flag_manager import FeatureFlagManager
-
-if TYPE_CHECKING:
-    from superset.jinja_context import (  # pylint: disable=unused-import
-        BaseTemplateProcessor,
-    )
-
-
-class JinjaContextManager:
-    def __init__(self) -> None:
-        self._base_context = {
-            "datetime": datetime,
-            "random": random,
-            "relativedelta": relativedelta,
-            "time": time,
-            "timedelta": timedelta,
-            "uuid": uuid,
-        }
-        self._template_processors: Dict[str, Type["BaseTemplateProcessor"]] = {}
-
-    def init_app(self, app: Flask) -> None:
-        self._base_context.update(app.config["JINJA_CONTEXT_ADDONS"])
-        self._template_processors.update(app.config["CUSTOM_TEMPLATE_PROCESSORS"])
-
-    @property
-    def base_context(self) -> Dict[str, Any]:
-        return self._base_context
-
-    @property
-    def template_processors(self) -> Dict[str, Type["BaseTemplateProcessor"]]:
-        return self._template_processors
+from superset.utils.machine_auth import MachineAuthProviderFactory
 
 
 class ResultsBackendManager:
@@ -130,13 +98,15 @@ class UIManifestProcessor:
 
 APP_DIR = os.path.dirname(__file__)
 appbuilder = AppBuilder(update_perms=False)
+async_query_manager = AsyncQueryManager()
 cache_manager = CacheManager()
 celery_app = celery.Celery()
+csrf = CSRFProtect()
 db = SQLA()
 _event_logger: Dict[str, Any] = {}
 event_logger = LocalProxy(lambda: _event_logger.get("event_logger"))
 feature_flag_manager = FeatureFlagManager()
-jinja_context_manager = JinjaContextManager()
+machine_auth_provider_factory = MachineAuthProviderFactory()
 manifest_processor = UIManifestProcessor(APP_DIR)
 migrate = Migrate()
 results_backend_manager = ResultsBackendManager()

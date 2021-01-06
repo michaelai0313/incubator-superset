@@ -24,7 +24,8 @@ from sqlalchemy.ext.declarative import declared_attr
 from sqlalchemy.orm import relationship, RelationshipProperty
 
 from superset import security_manager
-from superset.models.helpers import AuditMixinNullable, ImportMixin
+from superset.models.alerts import Alert
+from superset.models.helpers import AuditMixinNullable, ImportExportMixin
 
 metadata = Model.metadata  # pylint: disable=no-member
 
@@ -32,6 +33,7 @@ metadata = Model.metadata  # pylint: disable=no-member
 class ScheduleType(str, enum.Enum):
     slice = "slice"
     dashboard = "dashboard"
+    alert = "alert"
 
 
 class EmailDeliveryType(str, enum.Enum):
@@ -67,11 +69,14 @@ class EmailSchedule:
         )
 
     recipients = Column(Text)
+    slack_channel = Column(Text)
     deliver_as_group = Column(Boolean, default=False)
     delivery_type = Column(Enum(EmailDeliveryType))
 
 
-class DashboardEmailSchedule(Model, AuditMixinNullable, ImportMixin, EmailSchedule):
+class DashboardEmailSchedule(
+    Model, AuditMixinNullable, ImportExportMixin, EmailSchedule
+):
     __tablename__ = "dashboard_email_schedules"
     dashboard_id = Column(Integer, ForeignKey("dashboards.id"))
     dashboard = relationship(
@@ -79,16 +84,18 @@ class DashboardEmailSchedule(Model, AuditMixinNullable, ImportMixin, EmailSchedu
     )
 
 
-class SliceEmailSchedule(Model, AuditMixinNullable, ImportMixin, EmailSchedule):
+class SliceEmailSchedule(Model, AuditMixinNullable, ImportExportMixin, EmailSchedule):
     __tablename__ = "slice_email_schedules"
     slice_id = Column(Integer, ForeignKey("slices.id"))
     slice = relationship("Slice", backref="email_schedules", foreign_keys=[slice_id])
     email_format = Column(Enum(SliceEmailReportFormat))
 
 
-def get_scheduler_model(report_type: ScheduleType) -> Optional[Type[EmailSchedule]]:
+def get_scheduler_model(report_type: str) -> Optional[Type[EmailSchedule]]:
     if report_type == ScheduleType.dashboard:
         return DashboardEmailSchedule
-    elif report_type == ScheduleType.slice:
+    if report_type == ScheduleType.slice:
         return SliceEmailSchedule
+    if report_type == ScheduleType.alert:
+        return Alert
     return None
