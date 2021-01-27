@@ -32,6 +32,7 @@ import Icon from 'src/components/Icon';
 import { getChartDataRequest } from 'src/chart/chartAction';
 import { areObjectsEqual } from 'src/reduxUtils';
 import Loading from 'src/components/Loading';
+import BasicErrorAlert from 'src/components/ErrorMessage/BasicErrorAlert';
 import FilterConfigurationLink from './FilterConfigurationLink';
 // import FilterScopeModal from 'src/dashboard/components/filterscope/FilterScopeModal';
 
@@ -47,7 +48,7 @@ import CascadePopover from './CascadePopover';
 const barWidth = `250px`;
 
 const BarWrapper = styled.div`
-  width: ${({ theme }) => theme.gridUnit * 6}px;
+  width: ${({ theme }) => theme.gridUnit * 8}px;
   &.open {
     width: ${barWidth}; // arbitrary...
   }
@@ -67,18 +68,14 @@ const Bar = styled.div`
   /* &.animated {
     display: flex;
     transform: translateX(-100%);
-    transition: transform ${({
-    theme,
-  }) => theme.transitionTiming}s;
+    transition: transform ${({ theme }) => theme.transitionTiming}s;
     transition-delay: 0s;
   }  */
   &.open {
     display: flex;
     /* &.animated {
       transform: translateX(0);
-      transition-delay: ${({
-      theme,
-    }) => theme.transitionTiming * 2}s;
+      transition-delay: ${({ theme }) => theme.transitionTiming * 2}s;
     } */
   }
 `;
@@ -88,25 +85,24 @@ const CollapsedBar = styled.div`
   top: 0;
   left: 0;
   height: 100%;
-  width: ${({ theme }) => theme.gridUnit * 6}px;
+  width: ${({ theme }) => theme.gridUnit * 8}px;
   padding-top: ${({ theme }) => theme.gridUnit * 2}px;
   display: none;
   text-align: center;
   /* &.animated {
     display: block;
     transform: translateX(-100%);
-    transition: transform ${({
-    theme,
-  }) => theme.transitionTiming}s;
+    transition: transform ${({ theme }) => theme.transitionTiming}s;
     transition-delay: 0s;
   } */
   &.open {
-    display: block;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: ${({ theme }) => theme.gridUnit * 2}px;
     /* &.animated {
       transform: translateX(0);
-      transition-delay: ${({
-      theme,
-    }) => theme.transitionTiming * 3}s;
+      transition-delay: ${({ theme }) => theme.transitionTiming * 3}s;
     } */
   }
   svg {
@@ -114,6 +110,11 @@ const CollapsedBar = styled.div`
     height: ${({ theme }) => theme.gridUnit * 4}px;
     cursor: pointer;
   }
+`;
+
+const StyledCollapseIcon = styled(Icon)`
+  color: ${({ theme }) => theme.colors.primary.base};
+  margin-bottom: ${({ theme }) => theme.gridUnit * 3}px;
 `;
 
 const TitleArea = styled.h4`
@@ -157,10 +158,11 @@ const StyledCascadeChildrenList = styled.ul`
 `;
 
 const StyledFilterControlTitle = styled.h4`
+  width: 100%;
   font-size: ${({ theme }) => theme.typography.sizes.s}px;
   color: ${({ theme }) => theme.colors.grayscale.dark1};
   margin: 0;
-  text-transform: uppercase;
+  overflow-wrap: break-word;
 `;
 
 const StyledFilterControlTitleBox = styled.div`
@@ -214,7 +216,8 @@ const FilterValue: React.FC<FilterProps> = ({
   } = filter;
   const cascadingFilters = useCascadingFilters(id);
   const [loading, setLoading] = useState<boolean>(true);
-  const [state, setState] = useState({ data: undefined });
+  const [state, setState] = useState([]);
+  const [error, setError] = useState<boolean>(false);
   const [formData, setFormData] = useState<Partial<QueryFormData>>({});
   const [target] = targets;
   const { datasetId = 18, column } = target;
@@ -247,12 +250,18 @@ const FilterValue: React.FC<FilterProps> = ({
         formData: newFormData,
         force: false,
         requestParams: { dashboardId: 0 },
-      }).then(response => {
-        setState({ data: response.result[0].data });
-        setLoading(false);
-      });
+      })
+        .then(response => {
+          setState(response.result);
+          setError(false);
+          setLoading(false);
+        })
+        .catch(() => {
+          setError(true);
+          setLoading(false);
+        });
     }
-  }, [cascadingFilters]);
+  }, [cascadingFilters, datasetId, groupby]);
 
   const setExtraFormData = (extraFormData: ExtraFormData) =>
     onExtraFormDataChange(filter, extraFormData);
@@ -262,6 +271,16 @@ const FilterValue: React.FC<FilterProps> = ({
       <StyledLoadingBox>
         <Loading />
       </StyledLoadingBox>
+    );
+  }
+
+  if (error) {
+    return (
+      <BasicErrorAlert
+        title={t('Cannot load filter')}
+        body={t('Check configuration')}
+        level="error"
+      />
     );
   }
 
@@ -276,7 +295,7 @@ const FilterValue: React.FC<FilterProps> = ({
           height={20}
           width={220}
           formData={getFormData()}
-          queriesData={[state]}
+          queriesData={state}
           chartType="filter_select"
           hooks={{ setExtraFormData }}
         />
@@ -313,30 +332,28 @@ interface CascadeFilterControlProps {
 export const CascadeFilterControl: React.FC<CascadeFilterControlProps> = ({
   filter,
   onExtraFormDataChange,
-}) => {
-  return (
-    <>
-      <StyledFilterControlBox>
-        <StyledCaretIcon name="caret-down" />
-        <FilterControl
-          filter={filter}
-          onExtraFormDataChange={onExtraFormDataChange}
-        />
-      </StyledFilterControlBox>
+}) => (
+  <>
+    <StyledFilterControlBox>
+      <StyledCaretIcon name="caret-down" />
+      <FilterControl
+        filter={filter}
+        onExtraFormDataChange={onExtraFormDataChange}
+      />
+    </StyledFilterControlBox>
 
-      <StyledCascadeChildrenList>
-        {filter.cascadeChildren?.map(childFilter => (
-          <li key={childFilter.id}>
-            <CascadeFilterControl
-              filter={childFilter}
-              onExtraFormDataChange={onExtraFormDataChange}
-            />
-          </li>
-        ))}
-      </StyledCascadeChildrenList>
-    </>
-  );
-};
+    <StyledCascadeChildrenList>
+      {filter.cascadeChildren?.map(childFilter => (
+        <li key={childFilter.id}>
+          <CascadeFilterControl
+            filter={childFilter}
+            onExtraFormDataChange={onExtraFormDataChange}
+          />
+        </li>
+      ))}
+    </StyledCascadeChildrenList>
+  </>
+);
 
 const FilterBar: React.FC<FiltersBarProps> = ({
   filtersOpen,
@@ -431,7 +448,7 @@ const FilterBar: React.FC<FiltersBarProps> = ({
         className={cx({ open: !filtersOpen })}
         onClick={() => toggleFiltersBar(true)}
       >
-        <Icon name="collapse" />
+        <StyledCollapseIcon name="collapse" />
         <Icon name="filter" />
       </CollapsedBar>
       <Bar className={cx({ open: filtersOpen })}>
@@ -454,7 +471,7 @@ const FilterBar: React.FC<FiltersBarProps> = ({
             buttonSize="sm"
             onClick={handleResetAll}
           >
-            {t('Reset All')}
+            {t('Reset all')}
           </Button>
           <Button
             buttonStyle="primary"

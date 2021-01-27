@@ -105,6 +105,7 @@ setup(
         "sqlalchemy>=1.3.16, <2.0, !=1.3.21",
         "sqlalchemy-utils>=0.36.6,<0.37",
         "sqlparse==0.3.0",  # PINNED! see https://github.com/andialbrecht/sqlparse/issues/562
+        "typing-extensions>=3.7.4.3,<4",  # needed to support typing.Literal on py37
         "wtforms-json",
         "pyparsing>=2.4.7, <3.0.0",
         "holidays==0.10.3",  # PINNED! https://github.com/dr-prodigy/python-holidays/issues/406
@@ -123,6 +124,7 @@ setup(
         "dremio": ["sqlalchemy-dremio>=1.1.5, <1.2"],
         "drill": ["sqlalchemy-drill==0.1.dev"],
         "druid": ["pydruid>=0.6.1,<0.7"],
+        "solr": ["sqlalchemy-solr >= 0.2.0"],
         "elasticsearch": ["elasticsearch-dbapi>=0.1.0, <0.2.0"],
         "exasol": ["sqlalchemy-exasol>=2.1.0, <2.2"],
         "excel": ["xlrd>=1.2.0, <1.3"],
@@ -146,9 +148,9 @@ setup(
     },
     python_requires="~=3.7",
     author="Apache Software Foundation",
-    author_email="dev@superset.incubator.apache.org",
+    author_email="dev@superset.apache.org",
     url="https://superset.apache.org/",
-    download_url="https://www.apache.org/dist/incubator/superset/" + version_string,
+    download_url="https://www.apache.org/dist/superset/" + version_string,
     classifiers=[
         "Programming Language :: Python :: 3.7",
         "Programming Language :: Python :: 3.8",

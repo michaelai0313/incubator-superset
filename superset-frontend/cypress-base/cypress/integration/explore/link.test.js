@@ -24,16 +24,14 @@ import rison from 'rison';
 import shortid from 'shortid';
 import { HEALTH_POP_FORM_DATA_DEFAULTS } from './visualizations/shared.helper';
 
-const apiURL = (endpoint, queryObject) => {
-  return `${endpoint}?q=${rison.encode(queryObject)}`;
-};
+const apiURL = (endpoint, queryObject) =>
+  `${endpoint}?q=${rison.encode(queryObject)}`;
 
 describe('Test explore links', () => {
   beforeEach(() => {
     cy.login();
-    cy.server();
-    cy.route('GET', '/superset/explore_json/**').as('getJson');
-    cy.route('POST', '/superset/explore_json/**').as('postJson');
+    cy.intercept('GET', '/superset/explore_json/**').as('getJson');
+    cy.intercept('POST', '/superset/explore_json/**').as('postJson');
   });
 
   it('Open and close view query modal', () => {
@@ -51,7 +49,7 @@ describe('Test explore links', () => {
   });
 
   it('Visit short link', () => {
-    cy.route('POST', 'r/shortner/').as('getShortUrl');
+    cy.intercept('POST', 'r/shortner/').as('getShortUrl');
 
     cy.visitChartByName('Growth Rate');
     cy.verifySliceSuccess({ waitAlias: '@postJson' });
